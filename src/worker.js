@@ -1,5 +1,5 @@
 // Hari Om backend v2
-// - login with mobile + 4 digit PIN (PIN hashed with a server-side secret, escalating lockout)
+// - login with username + password (hashed with a server-side secret, escalating lockout)
 // - HttpOnly cookie session, CSRF + origin checks, strict security headers
 // - all personal data encrypted at rest with AES-256-GCM (key lives in a Cloudflare secret, not in the database)
 // - sends WhatsApp reminders and push notifications to your phone from a cron trigger
@@ -101,7 +101,7 @@ async function decField(env, s, aad) {
 }
 async function phoneHash(env, phone) {
   const k = await keys(env);
-  return hex(await crypto.subtle.sign('HMAC', k.mac, enc.encode('phone:' + phone)));
+  return hex(await crypto.subtle.sign('HMAC', k.mac, enc.encode('user:' + phone)));
 }
 // PIN / recovery key hash: HMAC with the server secret first, then PBKDF2. A stolen database alone cannot be brute forced.
 async function hashSecret(env, secret, saltB64) {
@@ -116,12 +116,11 @@ async function hashSecret(env, secret, saltB64) {
 // ---------- validation ----------
 const okId = (s) => typeof s === 'string' && /^[\w-]{6,64}$/.test(s);
 const str = (s, n) => String(s ?? '').slice(0, n);
-function normPhone(p) {
-  let d = String(p || '').replace(/\D/g, '');
-  if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
-  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
-  return /^[6-9]\d{9}$/.test(d) ? d : null;
+function normUser(u) {
+  const x = String(u || '').trim().toLowerCase();
+  return /^[a-z0-9._]{3,30}$/.test(x) ? x : null;
 }
+const okPw = (s) => typeof s === 'string' && s.length >= 6 && s.length <= 64;
 function makeRecoveryKey() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const chars = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => alphabet[b % alphabet.length]);
@@ -234,10 +233,10 @@ async function api(req, env, url) {
   if (path === '/api/register') {
     if (!env.SETUP_CODE) return json({ error: 'Server is not set up yet (SETUP_CODE missing).' }, 503);
     if (!same(await sha256Hex(String(body.setupCode || '')), await sha256Hex(env.SETUP_CODE))) return json({ error: 'Wrong setup code' }, 403);
-    const phone = normPhone(body.phone);
+    const phone = normUser(body.username);
     const pin = String(body.pin || '');
-    if (!phone) return json({ error: 'Enter a valid 10 digit mobile number' }, 400);
-    if (!/^\d{4}$/.test(pin)) return json({ error: 'PIN must be exactly 4 digits' }, 400);
+    if (!phone) return json({ error: 'Username must be 3 to 30 letters, numbers, dots or underscores' }, 400);
+    if (!okPw(pin)) return json({ error: 'Password must be at least 6 characters' }, 400);
     const id = crypto.randomUUID();
     const pinSalt = newSalt();
     const recSalt = newSalt();
@@ -257,14 +256,14 @@ async function api(req, env, url) {
       )
       .run();
     if (!res.meta || res.meta.changes !== 1) return json({ error: 'This app already has an owner. Please log in.' }, 403);
-    return json({ phone, recoveryKey }, 200, [await startSession(env, id, secure)]);
+    return json({ username: phone, recoveryKey }, 200, [await startSession(env, id, secure)]);
   }
 
   if (path === '/api/login') {
-    const phone = normPhone(body.phone);
+    const phone = normUser(body.username);
     const pin = String(body.pin || '');
-    const bad = () => json({ error: 'Wrong mobile number or PIN' }, 401);
-    if (!phone || !/^\d{4}$/.test(pin)) return bad();
+    const bad = () => json({ error: 'Wrong username or password' }, 401);
+    if (!phone || !okPw(pin)) return bad();
     const user = await env.DB.prepare('SELECT * FROM users WHERE phone_h=?').bind(await phoneHash(env, phone)).first();
     if (!user) {
       await hashSecret(env, pin, newSalt()); // same work as a real check, so timing does not reveal anything
@@ -276,18 +275,18 @@ async function api(req, env, url) {
       return bad();
     }
     await env.DB.prepare('UPDATE users SET failed=0, lockouts=0, locked_until=0 WHERE id=?').bind(user.id).run();
-    return json({ phone }, 200, [await startSession(env, user.id, secure)]);
+    return json({ username: phone }, 200, [await startSession(env, user.id, secure)]);
   }
 
   if (path === '/api/reset') {
-    const phone = normPhone(body.phone);
+    const phone = normUser(body.username);
     const key = String(body.recoveryKey || '').trim().toUpperCase();
     const pin = String(body.pin || '');
-    if (!phone || !key || !/^\d{4}$/.test(pin)) return json({ error: 'Fill every field correctly' }, 400);
+    if (!phone || !key || !okPw(pin)) return json({ error: 'Fill every field correctly (password at least 6 characters)' }, 400);
     const user = await env.DB.prepare('SELECT * FROM users WHERE phone_h=?').bind(await phoneHash(env, phone)).first();
     if (!user || !same(await hashSecret(env, key, user.recovery_salt), user.recovery_hash)) {
       if (!user) await hashSecret(env, key, newSalt());
-      return json({ error: 'Mobile number or recovery key is wrong' }, 401);
+      return json({ error: 'Username or recovery key is wrong' }, 401);
     }
     const salt = newSalt();
     await env.DB.batch([
@@ -298,7 +297,7 @@ async function api(req, env, url) {
       ),
       env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(user.id),
     ]);
-    return json({ phone }, 200, [await startSession(env, user.id, secure)]);
+    return json({ username: phone }, 200, [await startSession(env, user.id, secure)]);
   }
 
   if (path === '/api/logout') {
@@ -327,15 +326,15 @@ async function api(req, env, url) {
     });
   }
 
-  if (path === '/api/change-pin') {
+  if (path === '/api/change-password') {
     const user = await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(uid).first();
     const pin = String(body.pin || '');
     const nw = String(body.newPin || '');
-    if (!/^\d{4}$/.test(nw)) return out({ error: 'New PIN must be exactly 4 digits' }, 400);
+    if (!okPw(nw)) return out({ error: 'New password must be at least 6 characters' }, 400);
     if (user.locked_until > Date.now()) return lockedResponse(user);
-    if (!/^\d{4}$/.test(pin) || !same(await hashSecret(env, pin, user.pin_salt), user.pin_hash)) {
+    if (!okPw(pin) || !same(await hashSecret(env, pin, user.pin_salt), user.pin_hash)) {
       await failAttempt(env, user);
-      return out({ error: 'Current PIN is wrong' }, 401);
+      return out({ error: 'Current password is wrong' }, 401);
     }
     const salt = newSalt();
     await env.DB.batch([

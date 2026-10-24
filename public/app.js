@@ -132,7 +132,7 @@ function setStatus(s) { UI.status = s; const d = $('#dot'); if (d) d.className =
 function scheduleSync() { clearTimeout(stimer); stimer = setTimeout(sync, 400); }
 async function relogin() {
   if (!PIN || !CFG.phone) return false;
-  try { await api('/api/login', { phone: CFG.phone, pin: PIN }); return true; } catch { return false; }
+  try { await api('/api/login', { username: CFG.phone, pin: PIN }); return true; } catch { return false; }
 }
 async function sync(retried) {
   if (!S || syncing) return;
@@ -202,46 +202,49 @@ function applyTheme() {
 
 // ---------- auth + lock screens ----------
 function authView() {
-  if (UI.recovery) return `<div class="auth enter"><div class="om">ॐ</div><h1>Save your recovery key</h1><p class="sub">If you ever forget your PIN, this key is the only way back in. Write it down or take a screenshot now.</p>
+  if (UI.recovery) return `<div class="auth enter"><div class="om">ॐ</div><h1>Save your recovery key</h1><p class="sub">If you ever forget your password, this key is the only way back in. Write it down or take a screenshot now.</p>
   <div class="card" style="padding:22px"><div class="rkey">${esc(UI.recovery)}</div><div class="acts" style="margin:0"><button class="btn ghost" data-a="copy-key">Copy</button><button class="btn primary" data-a="key-done">I have saved it</button></div></div></div>`;
-  const m = UI.mode;
-  const title = m === 'register' ? 'Create your private account' : m === 'forgot' ? 'Reset your PIN' : 'Welcome back';
+  const m = UI.mode, forgot = m === 'forgot';
+  const tabs = forgot ? '' : `<div class="seg" data-tone="${m}"><div class="seg-in" style="--n:2;--i:${m === 'register' ? 0 : 1}"><span class="seg-ind"></span><button type="button" class="seg-b ${m === 'register' ? 'on' : ''}" data-a="mode" data-v="register">Create account</button><button type="button" class="seg-b ${m === 'login' ? 'on' : ''}" data-a="mode" data-v="login">Log in</button></div></div>`;
+  const title = m === 'register' ? 'Create your private account' : forgot ? 'Reset your password' : 'Welcome back';
   return `<div class="auth enter"><div class="om">ॐ</div><h1>Hari Om</h1><p class="sub">${title}</p>
   <div class="card"><div id="authForm">
-    ${!UI.ready ? '<div class="warn">The server is not fully set up yet. Finish step 2 of the README (secret keys), then reopen this page.</div>' : ''}
-    <label class="f" style="margin-top:0">Mobile number</label>
-    <input class="inp" id="a-phone" inputmode="numeric" maxlength="10" placeholder="10 digit mobile number" autocomplete="username" value="${esc(CFG.phone || '')}">
-    ${m === 'forgot' ? `<label class="f">Recovery key</label><input class="inp" id="a-key" placeholder="XXXX-XXXX-XXXX-XXXX" autocapitalize="characters" autocomplete="off">` : ''}
-    ${m === 'register' ? `<label class="f">Setup code (from the setup step)</label><input class="inp" id="a-code" placeholder="Your setup code" autocapitalize="characters" autocomplete="off">` : ''}
-    <label class="f">${m === 'forgot' ? 'New 4 digit PIN' : '4 digit PIN'}</label>
-    <input class="inp pin" id="a-pin" type="password" inputmode="numeric" maxlength="4" placeholder="••••" autocomplete="current-password">
-    ${m === 'register' ? `<label class="f">Confirm PIN</label><input class="inp pin" id="a-pin2" type="password" inputmode="numeric" maxlength="4" placeholder="••••" autocomplete="off">` : ''}
+    ${tabs}
+    ${!UI.ready ? '<div class="warn">The server is not fully set up yet. Add the secret keys in Cloudflare (Settings, Variables and Secrets), then reopen this page.</div>' : ''}
+    <label class="f" ${tabs ? '' : 'style="margin-top:0"'}>Username</label>
+    <input class="inp" id="a-user" placeholder="e.g. rudra" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" value="${esc(CFG.phone || '')}">
+    ${forgot ? `<label class="f">Recovery key</label><input class="inp" id="a-key" placeholder="XXXX-XXXX-XXXX-XXXX" autocapitalize="characters" autocomplete="off">` : ''}
+    ${m === 'register' ? `<label class="f">Setup code</label><input class="inp" id="a-code" placeholder="The SETUP_CODE you saved" autocapitalize="characters" autocomplete="off">` : ''}
+    <label class="f">${forgot ? 'New password' : 'Password'}</label>
+    <input class="inp" id="a-pw" type="password" placeholder="At least 6 characters" autocomplete="${m === 'login' ? 'current-password' : 'new-password'}">
+    ${m === 'register' ? `<label class="f">Confirm password</label><input class="inp" id="a-pw2" type="password" placeholder="Type it again" autocomplete="new-password">` : ''}
     <div class="err" id="a-err">${esc(UI.err)}</div>
-    <button class="btn primary" style="width:100%;margin-top:6px" data-a="auth-go">${m === 'register' ? 'Create account' : m === 'forgot' ? 'Reset PIN' : 'Log in'}</button>
+    <button class="btn primary" style="width:100%;margin-top:6px" data-a="auth-go">${m === 'register' ? 'Create account' : forgot ? 'Reset password' : 'Log in'}</button>
   </div></div>
-  ${m === 'login' ? `<a class="link" data-a="mode" data-v="forgot">Forgot PIN? <b>Use recovery key</b></a>${!UI.hasUser ? `<a class="link" data-a="mode" data-v="register">First time here? <b>Create account</b></a>` : ''}` : `<a class="link" data-a="mode" data-v="login">Back to <b>log in</b></a>`}</div>`;
+  ${m === 'login' ? `<a class="link" data-a="mode" data-v="forgot">Forgot password? <b>Use recovery key</b></a>` : forgot ? `<a class="link" data-a="mode" data-v="login">Back to <b>log in</b></a>` : ''}</div>`;
 }
 function renderAuth() { UI.shell = false; $('#app').innerHTML = authView(); }
 async function loadStatus() {
   try {
     const r = await api('/api/status'); UI.hasUser = r.hasUser; UI.ready = r.ready;
     if (!UI.touched && UI.mode === 'login' && !r.hasUser) UI.mode = 'register';
+    if (r.hasUser === false && !UI.touched) UI.mode = 'register';
     if (!UI.recovery && !S) renderAuth();
   } catch {}
 }
 async function authGo() {
-  const phone = ($('#a-phone').value || '').trim(), pin = $('#a-pin').value, m = UI.mode;
+  const user = ($('#a-user').value || '').trim().toLowerCase(), pin = $('#a-pw').value, m = UI.mode;
   const fail = (t) => { UI.err = t; $('#a-err').textContent = t; };
-  if (!/^\d{10}$/.test(phone)) return fail('Enter a valid 10 digit mobile number');
-  if (!/^\d{4}$/.test(pin)) return fail('PIN must be exactly 4 digits');
-  if (m === 'register' && pin !== $('#a-pin2').value) return fail('The two PINs do not match');
+  if (!/^[a-z0-9._]{3,30}$/.test(user)) return fail('Username: 3 to 30 letters, numbers, dots or underscores');
+  if (pin.length < 6) return fail('Password must be at least 6 characters');
+  if (m === 'register' && pin !== $('#a-pw2').value) return fail('The two passwords do not match');
   const btn = $('[data-a=auth-go]'); btn.disabled = true; fail('');
   try {
-    const body = { phone, pin };
+    const body = { username: user, pin };
     if (m === 'forgot') body.recoveryKey = $('#a-key').value;
     if (m === 'register') body.setupCode = $('#a-code').value.trim().toUpperCase();
     const r = await api(m === 'register' ? '/api/register' : m === 'forgot' ? '/api/reset' : '/api/login', body);
-    await afterAuth(r.phone || phone, pin, r.recoveryKey);
+    await afterAuth(r.username || user, pin, r.recoveryKey);
   } catch (e) {
     btn.disabled = false;
     fail(e.status ? e.message : 'No internet. Connect once to log in.');
@@ -261,34 +264,27 @@ async function logout() {
 }
 
 function lockView(msg) {
-  return `<div class="lock enter"><div class="om">ॐ</div><h1>Hari Om</h1><p id="lock-sub">${esc(msg || 'Enter your PIN')}</p>
-  <div class="dots" id="dots"><i></i><i></i><i></i><i></i></div>
-  <div class="pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button data-a="pk" data-v="${n}">${n}</button>`).join('')}<button class="ghostk" disabled></button><button data-a="pk" data-v="0">0</button><button class="ghostk" data-a="pk" data-v="b" aria-label="Delete">⌫</button></div>
-  <a class="link" data-a="relogin">Forgot PIN? <b>Log in again</b></a></div>`;
+  return `<div class="lock enter"><div class="om">ॐ</div><h1>Hari Om</h1><p id="lock-sub">${esc(msg || 'Enter your password')}</p>
+  <div class="card" style="width:100%;max-width:340px"><input class="inp" id="l-pw" type="password" placeholder="Password" autocomplete="current-password"><button class="btn primary" style="width:100%;margin-top:12px" data-a="unlock">Unlock</button></div>
+  <a class="link" data-a="relogin">Forgot password? <b>Log in again</b></a></div>`;
 }
-function renderLock(msg) { UI.shell = false; UI.pinBuf = ''; $('#app').innerHTML = lockView(msg); }
-function updDots() { document.querySelectorAll('#dots i').forEach((d, i) => d.classList.toggle('on', i < UI.pinBuf.length)); }
-function keyPress(v) {
-  if (!$('.lock') || UI.unlocking) return;
-  if (v === 'b') UI.pinBuf = UI.pinBuf.slice(0, -1); else if (UI.pinBuf.length < 4) UI.pinBuf += v;
-  updDots();
-  if (UI.pinBuf.length === 4) doUnlock();
-}
+function renderLock(msg) { UI.shell = false; $('#app').innerHTML = lockView(msg); setTimeout(() => { const i = $('#l-pw'); if (i) i.focus(); }, 60); }
 async function doUnlock() {
-  UI.unlocking = true; const pin = UI.pinBuf;
+  const inp = $('#l-pw'); if (!inp || UI.unlocking) return;
+  const pin = inp.value; if (!pin) return;
+  UI.unlocking = true;
   try {
     const key = await deriveKey(pin, CFG.salt);
     try {
       S = await openCache(key); K = key; PIN = pin; CFG.fails = 0; saveCfg(); UI.unlocking = false; enterApp(); return;
     } catch {
       CFG.fails = (CFG.fails || 0) + 1; saveCfg();
-      if (CFG.fails >= 5) { UI.unlocking = false; forceAuth('Too many wrong PINs. Log in again to continue.'); return; }
+      if (CFG.fails >= 5) { UI.unlocking = false; forceAuth('Too many wrong passwords. Log in again to continue.'); return; }
     }
   } catch {}
   UI.unlocking = false; hap([40, 40, 40]);
-  const dots = $('#dots'); if (dots) { dots.classList.remove('shake'); void dots.offsetWidth; dots.classList.add('shake'); }
-  const sub = $('#lock-sub'); if (sub) sub.textContent = `Wrong PIN. ${5 - CFG.fails} tries left.`;
-  UI.pinBuf = ''; setTimeout(updDots, 250);
+  inp.value = ''; inp.classList.remove('shake'); void inp.offsetWidth; inp.classList.add('shake');
+  const sub = $('#lock-sub'); if (sub) sub.textContent = `Wrong password. ${5 - CFG.fails} tries left.`;
 }
 async function lockNow() {
   await sealCache(); S = null; K = null; PIN = ''; UI.layers = []; UI.sheet = null; renderLock();
@@ -397,17 +393,17 @@ function meView() {
   else if (perm === 'denied') { ntext = 'Notifications are blocked. Allow them for this site in your browser settings, then come back.'; nbtn = ''; }
   else if (me && !me.vapid) { ntext = 'Push keys are not set on the server yet. Finish step 2 of the README.'; nbtn = ''; }
   else if (pushOn) { ntext = 'Notifications are on for this phone.'; nbtn = `<div class="acts" style="margin:0"><button class="btn ghost" data-a="push-test">Send a test</button><button class="btn ghost danger" data-a="push-off">Turn off</button></div>`; }
-  return `<div class="top"><div class="brand"><div class="om">ॐ</div><div><h1>You</h1><small>+91 ${esc(CFG.phone || '')}</small></div></div><span id="dot" class="dot ${UI.status}"></span></div>
+  return `<div class="top"><div class="brand"><div class="om">ॐ</div><div><h1>You</h1><small>@${esc(CFG.phone || '')}</small></div></div><span id="dot" class="dot ${UI.status}"></span></div>
   <div class="me-row">
     <div class="setcol"><b>Notifications</b><div class="mu" style="font-size:13px;line-height:1.55">${esc(ntext)}</div>${nbtn}</div>
     <div class="setcol"><b>Appearance</b>${seg('theme', [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Auto']], CFG.theme || 'light', true)}</div>
-    <div class="setcol"><b>Lock the app after</b>${seg('lockmin', [['1', '1 min'], ['5', '5 min'], ['15', '15 min']], String(CFG.lockMin || 5), true)}<div class="mu" style="font-size:12.5px">When you leave the app for this long it asks for your PIN again.</div></div>
+    <div class="setcol"><b>Lock the app after</b>${seg('lockmin', [['1', '1 min'], ['5', '5 min'], ['15', '15 min']], String(CFG.lockMin || 5), true)}<div class="mu" style="font-size:12.5px">When you leave the app for this long it asks for your password again.</div></div>
     <div class="setrow"><div class="pm"><b>Vibration feedback</b><small>A tiny buzz when you tap</small></div><button class="sw ${CFG.haptics === false ? '' : 'on'}" data-a="toggle-hap" aria-label="Toggle vibration"></button></div>
     <div class="tile"><small>Sync status</small><b id="syncTxt">${UI.status === 'ok' ? 'Synced' : UI.status === 'off' ? 'Offline' : 'Idle'}</b><em>${pend ? pend + ' change(s) waiting to upload' : 'Everything is saved on the server'}</em></div>
     <div class="note"><b>WhatsApp</b><br>${me && me.wa ? 'Connected. Messages to your parties are sent automatically at the time you pick.' : 'Not connected yet. When a message is due you get a notification, and <b>Send now</b> in Reminders opens WhatsApp with it ready.'}</div>
     <button class="btn ghost" data-a="lock-now">${ic('lock')}&nbsp; Lock now</button>
     <button class="btn ghost" data-a="sync">Sync now</button>
-    <button class="btn ghost" data-a="change-pin">Change PIN</button>
+    <button class="btn ghost" data-a="change-pin">Change password</button>
     <button class="btn ghost" data-a="export">Download backup</button>
     <button class="btn ghost danger" data-a="logout">Log out</button>
   </div>`;
@@ -555,12 +551,12 @@ function schedHTML(s) {
   <div class="acts"><button class="btn ghost" data-a="sched-back">Back</button><button class="btn primary" data-a="sched-save">${self ? 'Set reminder' : 'Schedule'}</button></div>`;
 }
 function pinHTML(s) {
-  return `<div class="sh-head"><h3>Change PIN<small>Your other logins will be signed out</small></h3><button class="ibtn" data-a="close" aria-label="Close">${ic('x')}</button></div>
-  <label class="f" style="margin-top:0">Current PIN</label><input class="inp pin" name="cur" type="password" inputmode="numeric" maxlength="4" placeholder="••••" autocomplete="off">
-  <label class="f">New PIN</label><input class="inp pin" name="nw" type="password" inputmode="numeric" maxlength="4" placeholder="••••" autocomplete="off">
-  <label class="f">Confirm new PIN</label><input class="inp pin" name="nw2" type="password" inputmode="numeric" maxlength="4" placeholder="••••" autocomplete="off">
+  return `<div class="sh-head"><h3>Change password<small>Your other logins will be signed out</small></h3><button class="ibtn" data-a="close" aria-label="Close">${ic('x')}</button></div>
+  <label class="f" style="margin-top:0">Current password</label><input class="inp" name="cur" type="password" placeholder="Current password" autocomplete="current-password">
+  <label class="f">New password</label><input class="inp" name="nw" type="password" placeholder="At least 6 characters" autocomplete="new-password">
+  <label class="f">Confirm new password</label><input class="inp" name="nw2" type="password" placeholder="Type it again" autocomplete="new-password">
   <div class="err" id="pin-err"></div>
-  <div class="acts"><button class="btn ghost" data-a="close">Cancel</button><button class="btn primary" data-a="pin-save">Change PIN</button></div>`;
+  <div class="acts"><button class="btn ghost" data-a="close">Cancel</button><button class="btn primary" data-a="pin-save">Change password</button></div>`;
 }
 function detailHTML(s) {
   const t = S.data.txns.find((x) => x.id === s.id); if (!t) return '<div class="empty">Transaction not found</div>';
@@ -626,7 +622,7 @@ document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-a]'); if (!el) return;
   const a = el.dataset.a; const id = el.dataset.id; const s = UI.sheet;
   switch (a) {
-    case 'pk': keyPress(el.dataset.v); break;
+    case 'unlock': doUnlock(); break;
     case 'relogin': forceAuth(''); break;
     case 'tab': if (UI.tab !== el.dataset.v) { UI.tab = el.dataset.v; if (UI.tab !== 'me') { CFG.tab = UI.tab; saveCfg(); } renderView(true); renderNav(); window.scrollTo(0, 0); if (UI.tab === 'me') loadMe(); } break;
     case 'party': openLayer({ id }); break;
@@ -697,14 +693,14 @@ document.addEventListener('click', async (e) => {
     case 'change-pin': openSheet({ step: 'pin', f: { cur: '', nw: '', nw2: '' } }); break;
     case 'pin-save': {
       const f = s.f; const er = $('#pin-err');
-      if (!/^\d{4}$/.test(f.cur) || !/^\d{4}$/.test(f.nw)) { er.textContent = 'PINs must be exactly 4 digits'; break; }
-      if (f.cur !== PIN) { er.textContent = 'Current PIN is wrong'; break; }
-      if (f.nw !== f.nw2) { er.textContent = 'The new PINs do not match'; break; }
-      if (f.nw === f.cur) { er.textContent = 'Choose a different PIN'; break; }
+      if (f.nw.length < 6) { er.textContent = 'New password must be at least 6 characters'; break; }
+      if (f.cur !== PIN) { er.textContent = 'Current password is wrong'; break; }
+      if (f.nw !== f.nw2) { er.textContent = 'The new passwords do not match'; break; }
+      if (f.nw === f.cur) { er.textContent = 'Choose a different password'; break; }
       try {
-        await api('/api/change-pin', { pin: f.cur, newPin: f.nw });
+        await api('/api/change-password', { pin: f.cur, newPin: f.nw });
         CFG.salt = b64e(crypto.getRandomValues(new Uint8Array(16))); saveCfg(); K = await deriveKey(f.nw, CFG.salt); PIN = f.nw; await sealCache();
-        closeSheet(); toast('PIN changed'); burst();
+        closeSheet(); toast('Password changed'); burst();
       } catch (err) { er.textContent = err.message; }
       break;
     }
@@ -714,7 +710,7 @@ document.addEventListener('click', async (e) => {
       const l = document.createElement('a'); l.href = u; l.download = `hariom-backup-${nowParts().date}.json`; l.click(); setTimeout(() => URL.revokeObjectURL(u), 3000);
       toast('Backup saved. It is not encrypted, so keep it private.'); break;
     }
-    case 'logout': if (await ask('Log out?', S.outbox.length ? 'Some changes have not been uploaded yet and will be lost.' : 'You will need your mobile number and PIN to get back in.', 'Log out')) logout(); break;
+    case 'logout': if (await ask('Log out?', S.outbox.length ? 'Some changes have not been uploaded yet and will be lost.' : 'You will need your username and password to get back in.', 'Log out')) logout(); break;
     case 'mode': UI.mode = el.dataset.v; UI.touched = true; UI.err = ''; renderAuth(); break;
     case 'auth-go': authGo(); break;
     case 'copy-key': try { await navigator.clipboard.writeText(UI.recovery); toast('Copied'); } catch { toast('Select and copy it manually'); } break;
@@ -726,13 +722,13 @@ document.addEventListener('input', (e) => {
   const t = e.target; const s = UI.sheet;
   if (!s || !t.name || !s.f) return;
   const map = { sdate: 'sdate', stime: 'stime' };
-  s.f[map[t.name] || t.name] = t.name === 'phone' || t.name === 'cur' || t.name === 'nw' || t.name === 'nw2' ? t.value.replace(/\D/g, '') : t.value;
+  s.f[map[t.name] || t.name] = t.name === 'phone' ? t.value.replace(/\D/g, '') : t.value;
   if (t.name === 'phone') t.value = s.f.phone;
   if (t.name === 'name' && s.step === 'slip') matchParty();
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.closest('#authForm')) authGo();
-  if ($('.lock')) { if (/^\d$/.test(e.key)) keyPress(e.key); else if (e.key === 'Backspace') keyPress('b'); }
+  if (e.key === 'Enter' && e.target.id === 'l-pw') doUnlock();
 });
 
 let hiddenAt = 0;

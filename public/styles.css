@@ -289,3 +289,4 @@ textarea.inp{resize:vertical;min-height:130px;line-height:1.55}
 #sheet .scrim.out{animation:fadeOut .27s forwards}
 @keyframes drop{from{transform:translate(-50%,0)}to{transform:translate(-50%,100%)}}
 @keyframes fadeOut{from{opacity:1}to{opacity:0}}
+.inp.shake{animation:shake .45s}

@@ -38,8 +38,8 @@ npx wrangler secret bulk secrets.json
 ## Step 3. Install on your phone
 
 1. Open your link in Chrome on the phone.
-2. Create your account: mobile number, 4 digit PIN and the setup code. Only one account can ever be created, and only with the setup code, so nobody else can take over your app.
-3. Save the recovery key shown on the screen (take a screenshot). It is the only way to reset a forgotten PIN.
+2. Create your account: pick a username and password (at least 6 characters) and enter the setup code. Only one account can ever be created, and only with the setup code, so nobody else can take over your app.
+3. Save the recovery key shown on the screen (take a screenshot). It is the only way to reset a forgotten password.
 4. Chrome menu (three dots) > **Install app** (or **Add to Home screen**).
 
 ## Step 4. Turn on notifications
@@ -53,22 +53,22 @@ Open the app > **You** tab > **Turn on notifications**. Use **Send a test** to c
 * Repeats: once, every 15 days, every 30 days, every month, last day of month, or custom days.
 * **Receive** and **Pay** tabs show totals and parties. Tap a party for its history by month, tap a transaction for all details, edit or delete.
 * **Remind** tab: upcoming and sent. If WhatsApp is not connected yet, you get a notification when a message is due and **Send now** opens WhatsApp with the message ready.
-* The app locks when you leave it (1, 5 or 15 minutes, your choice) and asks for the PIN on every fresh launch. It works offline and uploads your changes when the internet returns.
+* The app locks when you leave it (1, 5 or 15 minutes, your choice) and asks for the password on every fresh launch. It works offline and uploads your changes when the internet returns.
 
 ## How your data is protected
 
 | Risk | What stops it |
 |---|---|
 | Someone steals the database | Names, phone numbers, amounts, notes and messages are stored as AES-256-GCM ciphertext. The key is a Cloudflare secret that is not in the database. Your mobile number is stored only as a keyed hash. |
-| Guessing your PIN | 5 wrong PINs lock login for 15 minutes, then 1 hour, 6 hours, 24 hours. The PIN is hashed together with a server secret, so a stolen database cannot be brute forced. A rate limit also applies per internet address. |
+| Guessing your password | 5 wrong passwords lock login for 15 minutes, then 1 hour, 6 hours, 24 hours. The password is hashed together with a server secret, so a stolen database cannot be brute forced. A rate limit also applies per internet address. |
 | Someone else creating an account on your link | Account creation needs your setup code and works only once. |
 | Another website acting as you | The login cookie is HttpOnly, Secure and SameSite=Strict, so page scripts and other sites cannot use it. Every request must also come from your own site. |
 | Malicious text injected into the app | Strict Content-Security-Policy (only your own scripts run, no framing), and all text is escaped before display. |
-| Someone picks up your unlocked phone later | The app locks itself after the time you choose. The copy of your data on the phone is encrypted with your PIN. Five wrong PINs on the lock screen erase it from the phone (it stays on the server). |
-| Lost phone | Log in from another phone, change your PIN. Changing the PIN signs out every other device. |
+| Someone picks up your unlocked phone later | The app locks itself after the time you choose. The copy of your data on the phone is encrypted with your password. Five wrong passwords on the lock screen erase it from the phone (it stays on the server). |
+| Lost phone | Log in from another phone, change your password. Changing the password signs out every other device. |
 
 Be aware of the limits:
-* A 4 digit PIN is weak against someone who has your phone **and** your encrypted local copy. The lockout protects the server, not a stolen file. A phone screen lock is your first line of defence.
+* A short password is weak against someone who has your phone **and** your encrypted local copy. The lockout protects the server, not a stolen file. A phone screen lock is your first line of defence.
 * You (as the Cloudflare account owner) can technically read the data, because the server must be able to send reminders. Protect your Cloudflare login with two-factor authentication.
 * WhatsApp messages travel through Meta's WhatsApp servers like any WhatsApp message. Push notifications go through Google's push service, but it only receives an empty wake-up signal. The text is fetched from your own server.
 * The "Download backup" file is not encrypted. Keep it private.
@@ -96,8 +96,8 @@ The server checks every minute and sends due messages. Meta's rules about using 
 
 * **"Server is not set up yet"**: do step 2.
 * **Cloudflare shows "CPU time limit exceeded" on login**: the free plan allows very little processing per request. Cloudflare's paid Workers plan (about 5 US dollars a month) removes the limit. Nothing else changes.
-* **Forgot your PIN**: login screen > Forgot PIN > recovery key.
-* **Lost both the PIN and the recovery key**: the data cannot be opened any more. To start fresh, open the D1 database `hariom-db` in the Cloudflare dashboard and run `delete from users; delete from sessions;`, then create the account again with your setup code. Old entries stay in the database but are not visible to the new account.
+* **Forgot your password**: login screen > Forgot PIN > recovery key.
+* **Lost both the password and the recovery key**: the data cannot be opened any more. To start fresh, open the D1 database `hariom-db` in the Cloudflare dashboard and run `delete from users; delete from sessions;`, then create the account again with your setup code. Old entries stay in the database but are not visible to the new account.
 
 ## Updating later
 
