@@ -15,4 +15,4 @@ crons = ["* * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "hariom-db"
-database_id = "PASTE_YOUR_DATABASE_ID_HERE"
+database_id = "f77f4df4-b7e7-421f-add8-8849d33e6e04"
