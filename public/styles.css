@@ -290,3 +290,9 @@ textarea.inp{resize:vertical;min-height:130px;line-height:1.55}
 @keyframes drop{from{transform:translate(-50%,0)}to{transform:translate(-50%,100%)}}
 @keyframes fadeOut{from{opacity:1}to{opacity:0}}
 .inp.shake{animation:shake .45s}
+
+.pw{position:relative}
+.pw .inp{padding-right:52px}
+.eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:42px;height:42px;border:0;background:none;color:var(--mu);display:grid;place-items:center;border-radius:50%}
+.eye svg{width:22px;height:22px}
+.eye.on{color:var(--tx)}

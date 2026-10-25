@@ -43,6 +43,7 @@ const ICON = {
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   wa: '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
 };
 const ic = (n) => `<svg class="i" viewBox="0 0 24 24">${ICON[n]}</svg>`;
@@ -201,6 +202,9 @@ function applyTheme() {
 }
 
 // ---------- auth + lock screens ----------
+function pwField(id, ph, ac, name) {
+  return `<div class="pw"><input class="inp" ${name ? `name="${name}"` : `id="${id}"`} type="password" placeholder="${ph}" autocomplete="${ac}" autocapitalize="none" spellcheck="false"><button type="button" class="eye" data-a="eye" aria-label="Show or hide password">${ic('eye')}</button></div>`;
+}
 function authView() {
   if (UI.recovery) return `<div class="auth enter"><div class="om">ॐ</div><h1>Save your recovery key</h1><p class="sub">If you ever forget your password, this key is the only way back in. Write it down or take a screenshot now.</p>
   <div class="card" style="padding:22px"><div class="rkey">${esc(UI.recovery)}</div><div class="acts" style="margin:0"><button class="btn ghost" data-a="copy-key">Copy</button><button class="btn primary" data-a="key-done">I have saved it</button></div></div></div>`;
@@ -210,14 +214,11 @@ function authView() {
   return `<div class="auth enter"><div class="om">ॐ</div><h1>Hari Om</h1><p class="sub">${title}</p>
   <div class="card"><div id="authForm">
     ${tabs}
-    ${!UI.ready ? '<div class="warn">The server is not fully set up yet. Add the secret keys in Cloudflare (Settings, Variables and Secrets), then reopen this page.</div>' : ''}
     <label class="f" ${tabs ? '' : 'style="margin-top:0"'}>Username</label>
     <input class="inp" id="a-user" placeholder="e.g. rudra" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" value="${esc(CFG.phone || '')}">
     ${forgot ? `<label class="f">Recovery key</label><input class="inp" id="a-key" placeholder="XXXX-XXXX-XXXX-XXXX" autocapitalize="characters" autocomplete="off">` : ''}
-    ${m === 'register' ? `<label class="f">Setup code</label><input class="inp" id="a-code" placeholder="The SETUP_CODE you saved" autocapitalize="characters" autocomplete="off">` : ''}
     <label class="f">${forgot ? 'New password' : 'Password'}</label>
-    <input class="inp" id="a-pw" type="password" placeholder="At least 6 characters" autocomplete="${m === 'login' ? 'current-password' : 'new-password'}">
-    ${m === 'register' ? `<label class="f">Confirm password</label><input class="inp" id="a-pw2" type="password" placeholder="Type it again" autocomplete="new-password">` : ''}
+    ${pwField('a-pw', m === 'login' ? 'Your password' : 'At least 8 characters', m === 'login' ? 'current-password' : 'new-password')}
     <div class="err" id="a-err">${esc(UI.err)}</div>
     <button class="btn primary" style="width:100%;margin-top:6px" data-a="auth-go">${m === 'register' ? 'Create account' : forgot ? 'Reset password' : 'Log in'}</button>
   </div></div>
@@ -236,13 +237,11 @@ async function authGo() {
   const user = ($('#a-user').value || '').trim().toLowerCase(), pin = $('#a-pw').value, m = UI.mode;
   const fail = (t) => { UI.err = t; $('#a-err').textContent = t; };
   if (!/^[a-z0-9._]{3,30}$/.test(user)) return fail('Username: 3 to 30 letters, numbers, dots or underscores');
-  if (pin.length < 6) return fail('Password must be at least 6 characters');
-  if (m === 'register' && pin !== $('#a-pw2').value) return fail('The two passwords do not match');
+  if (pin.length < 8) return fail('Password must be at least 8 characters');
   const btn = $('[data-a=auth-go]'); btn.disabled = true; fail('');
   try {
     const body = { username: user, pin };
     if (m === 'forgot') body.recoveryKey = $('#a-key').value;
-    if (m === 'register') body.setupCode = $('#a-code').value.trim().toUpperCase();
     const r = await api(m === 'register' ? '/api/register' : m === 'forgot' ? '/api/reset' : '/api/login', body);
     await afterAuth(r.username || user, pin, r.recoveryKey);
   } catch (e) {
@@ -265,7 +264,7 @@ async function logout() {
 
 function lockView(msg) {
   return `<div class="lock enter"><div class="om">ॐ</div><h1>Hari Om</h1><p id="lock-sub">${esc(msg || 'Enter your password')}</p>
-  <div class="card" style="width:100%;max-width:340px"><input class="inp" id="l-pw" type="password" placeholder="Password" autocomplete="current-password"><button class="btn primary" style="width:100%;margin-top:12px" data-a="unlock">Unlock</button></div>
+  <div class="card" style="width:100%;max-width:340px">${pwField('l-pw', 'Password', 'current-password')}<button class="btn primary" style="width:100%;margin-top:12px" data-a="unlock">Unlock</button></div>
   <a class="link" data-a="relogin">Forgot password? <b>Log in again</b></a></div>`;
 }
 function renderLock(msg) { UI.shell = false; $('#app').innerHTML = lockView(msg); setTimeout(() => { const i = $('#l-pw'); if (i) i.focus(); }, 60); }
@@ -552,9 +551,8 @@ function schedHTML(s) {
 }
 function pinHTML(s) {
   return `<div class="sh-head"><h3>Change password<small>Your other logins will be signed out</small></h3><button class="ibtn" data-a="close" aria-label="Close">${ic('x')}</button></div>
-  <label class="f" style="margin-top:0">Current password</label><input class="inp" name="cur" type="password" placeholder="Current password" autocomplete="current-password">
-  <label class="f">New password</label><input class="inp" name="nw" type="password" placeholder="At least 6 characters" autocomplete="new-password">
-  <label class="f">Confirm new password</label><input class="inp" name="nw2" type="password" placeholder="Type it again" autocomplete="new-password">
+  <label class="f" style="margin-top:0">Current password</label>${pwField('', 'Current password', 'current-password', 'cur')}
+  <label class="f">New password</label>${pwField('', 'At least 8 characters', 'new-password', 'nw')}
   <div class="err" id="pin-err"></div>
   <div class="acts"><button class="btn ghost" data-a="close">Cancel</button><button class="btn primary" data-a="pin-save">Change password</button></div>`;
 }
@@ -623,6 +621,7 @@ document.addEventListener('click', async (e) => {
   const a = el.dataset.a; const id = el.dataset.id; const s = UI.sheet;
   switch (a) {
     case 'unlock': doUnlock(); break;
+    case 'eye': { const i = el.parentElement.querySelector('input'); i.type = i.type === 'password' ? 'text' : 'password'; el.classList.toggle('on', i.type === 'text'); break; }
     case 'relogin': forceAuth(''); break;
     case 'tab': if (UI.tab !== el.dataset.v) { UI.tab = el.dataset.v; if (UI.tab !== 'me') { CFG.tab = UI.tab; saveCfg(); } renderView(true); renderNav(); window.scrollTo(0, 0); if (UI.tab === 'me') loadMe(); } break;
     case 'party': openLayer({ id }); break;
@@ -690,12 +689,11 @@ document.addEventListener('click', async (e) => {
     case 'push-off': try { await api('/api/push/unsubscribe', {}); const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); toast('Notifications are off'); loadMe(); } catch { toast('Could not turn off'); } break;
     case 'toggle-hap': CFG.haptics = CFG.haptics === false ? true : false; saveCfg(); el.classList.toggle('on', CFG.haptics !== false); if (CFG.haptics !== false) hap(20); break;
     case 'lock-now': lockNow(); break;
-    case 'change-pin': openSheet({ step: 'pin', f: { cur: '', nw: '', nw2: '' } }); break;
+    case 'change-pin': openSheet({ step: 'pin', f: { cur: '', nw: '' } }); break;
     case 'pin-save': {
       const f = s.f; const er = $('#pin-err');
-      if (f.nw.length < 6) { er.textContent = 'New password must be at least 6 characters'; break; }
+      if (f.nw.length < 8) { er.textContent = 'New password must be at least 8 characters'; break; }
       if (f.cur !== PIN) { er.textContent = 'Current password is wrong'; break; }
-      if (f.nw !== f.nw2) { er.textContent = 'The new passwords do not match'; break; }
       if (f.nw === f.cur) { er.textContent = 'Choose a different password'; break; }
       try {
         await api('/api/change-password', { pin: f.cur, newPin: f.nw });

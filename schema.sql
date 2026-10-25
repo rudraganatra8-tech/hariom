@@ -75,3 +75,8 @@ CREATE INDEX IF NOT EXISTS idx_rem_due ON reminders(status, send_at);
 CREATE INDEX IF NOT EXISTS idx_txn_user ON txns(user_id);
 CREATE INDEX IF NOT EXISTS idx_party_user ON parties(user_id);
 CREATE INDEX IF NOT EXISTS idx_notif_user ON notifs(user_id, shown);
+
+CREATE TABLE IF NOT EXISTS meta (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL                    -- auto-generated keys (only used when you did not set them as Cloudflare secrets)
+);

@@ -1,13 +1,15 @@
 // Hari Om backend v2
 // - login with username + password (hashed with a server-side secret, escalating lockout)
 // - HttpOnly cookie session, CSRF + origin checks, strict security headers
-// - all personal data encrypted at rest with AES-256-GCM (key lives in a Cloudflare secret, not in the database)
+// - all personal data encrypted at rest with AES-256-GCM (key is a Cloudflare secret if you set one, otherwise generated once and stored beside the data)
 // - sends WhatsApp reminders and push notifications to your phone from a cron trigger
+
+import { SCHEMA } from './schema.js';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const SESSION_DAYS = 30;
-const PBKDF2_ITER = 50000; // the secret "pepper" is what really protects the PIN, see README
+const PBKDF2_ITER = 50000; // the server-side pepper is what protects the password, see README
 const MAX_FAILS = 5;
 const LOCK_MIN = [15, 60, 360, 1440];
 const IST = 330 * 60000;
@@ -120,7 +122,7 @@ function normUser(u) {
   const x = String(u || '').trim().toLowerCase();
   return /^[a-z0-9._]{3,30}$/.test(x) ? x : null;
 }
-const okPw = (s) => typeof s === 'string' && s.length >= 6 && s.length <= 64;
+const okPw = (s) => typeof s === 'string' && s.length >= 8 && s.length <= 64;
 function makeRecoveryKey() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const chars = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => alphabet[b % alphabet.length]);
@@ -196,6 +198,37 @@ const lockedResponse = (user) => {
   return json({ error: `Too many wrong attempts. Try again in ${mins > 90 ? Math.ceil(mins / 60) + ' hours' : mins + ' min'}.` }, 429);
 };
 
+
+// ---------- first-run setup: tables and keys are created automatically ----------
+// If you set DATA_KEY / VAPID_JWK as Cloudflare secrets they are used (strongest). Otherwise random keys are
+// generated once and kept in the database, so nothing has to be set up by hand.
+let bootP = null;
+async function bootOnce(env) {
+  await env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q)));
+  const o = {};
+  if (!env.DATA_KEY || !env.VAPID_JWK) {
+    const get = async (k) => (await env.DB.prepare('SELECT v FROM meta WHERE k=?').bind(k).first())?.v;
+    if (!env.DATA_KEY) {
+      await env.DB.prepare('INSERT OR IGNORE INTO meta(k,v) VALUES(?,?)').bind('data_key', b64(crypto.getRandomValues(new Uint8Array(32)))).run();
+      o.DATA_KEY = await get('data_key');
+    }
+    if (!env.VAPID_JWK) {
+      const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+      await env.DB.prepare('INSERT OR IGNORE INTO meta(k,v) VALUES(?,?)').bind('vapid_jwk', JSON.stringify(await crypto.subtle.exportKey('jwk', kp.privateKey))).run();
+      o.VAPID_JWK = await get('vapid_jwk');
+    }
+  }
+  return o;
+}
+async function boot(env) {
+  if (!bootP) {
+    bootP = bootOnce(env);
+    bootP.catch(() => { bootP = null; });
+  }
+  const o = await bootP;
+  return Object.keys(o).length ? Object.assign(Object.create(env), o) : env;
+}
+
 // ---------- API ----------
 async function api(req, env, url) {
   const path = url.pathname;
@@ -203,7 +236,7 @@ async function api(req, env, url) {
 
   if (req.method === 'GET' && path === '/api/status') {
     const r = await env.DB.prepare('SELECT COUNT(*) AS n FROM users').first();
-    return json({ hasUser: (r?.n || 0) > 0, ready: !!(env.DATA_KEY && env.SETUP_CODE) });
+    return json({ hasUser: (r?.n || 0) > 0, ready: true });
   }
   if (req.method !== 'POST') return json({ error: 'Not found' }, 404);
 
@@ -231,12 +264,10 @@ async function api(req, env, url) {
   }
 
   if (path === '/api/register') {
-    if (!env.SETUP_CODE) return json({ error: 'Server is not set up yet (SETUP_CODE missing).' }, 503);
-    if (!same(await sha256Hex(String(body.setupCode || '')), await sha256Hex(env.SETUP_CODE))) return json({ error: 'Wrong setup code' }, 403);
     const phone = normUser(body.username);
     const pin = String(body.pin || '');
     if (!phone) return json({ error: 'Username must be 3 to 30 letters, numbers, dots or underscores' }, 400);
-    if (!okPw(pin)) return json({ error: 'Password must be at least 6 characters' }, 400);
+    if (!okPw(pin)) return json({ error: 'Password must be at least 8 characters' }, 400);
     const id = crypto.randomUUID();
     const pinSalt = newSalt();
     const recSalt = newSalt();
@@ -282,7 +313,7 @@ async function api(req, env, url) {
     const phone = normUser(body.username);
     const key = String(body.recoveryKey || '').trim().toUpperCase();
     const pin = String(body.pin || '');
-    if (!phone || !key || !okPw(pin)) return json({ error: 'Fill every field correctly (password at least 6 characters)' }, 400);
+    if (!phone || !key || !okPw(pin)) return json({ error: 'Fill every field correctly (password at least 8 characters)' }, 400);
     const user = await env.DB.prepare('SELECT * FROM users WHERE phone_h=?').bind(await phoneHash(env, phone)).first();
     if (!user || !same(await hashSecret(env, key, user.recovery_salt), user.recovery_hash)) {
       if (!user) await hashSecret(env, key, newSalt());
@@ -330,7 +361,7 @@ async function api(req, env, url) {
     const user = await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(uid).first();
     const pin = String(body.pin || '');
     const nw = String(body.newPin || '');
-    if (!okPw(nw)) return out({ error: 'New password must be at least 6 characters' }, 400);
+    if (!okPw(nw)) return out({ error: 'New password must be at least 8 characters' }, 400);
     if (user.locked_until > Date.now()) return lockedResponse(user);
     if (!okPw(pin) || !same(await hashSecret(env, pin, user.pin_salt), user.pin_hash)) {
       await failAttempt(env, user);
@@ -686,7 +717,7 @@ export default {
     const url = new URL(req.url);
     if (url.pathname.startsWith('/api/')) {
       try {
-        return await api(req, env, url);
+        return await api(req, await boot(env), url);
       } catch (e) {
         if (e && e.message === 'NO_KEY') return json({ error: 'Server is not set up yet. Finish step 2 of the README (secrets).' }, 503);
         return json({ error: 'Server error' }, 500);
@@ -700,6 +731,6 @@ export default {
     return out;
   },
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runReminders(env));
+    ctx.waitUntil(boot(env).then(runReminders));
   },
 };
