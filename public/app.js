@@ -347,6 +347,7 @@ function enterApp() {
   if (S) { S.data.cash = S.data.cash || []; S.data.cats = S.data.cats || []; }
   UI.tab = UI.startTab || (CFG.tab && CFG.tab !== 'me' ? CFG.tab : 'home'); UI.startTab = null; UI.shell = false;
   renderAll(); sync();
+  if (UI.startSend) { const rid = UI.startSend; UI.startSend = null; sync().finally(() => { if (!S) return; const r = S.data.reminders.find((x) => x.id === rid && x.status !== 'sent'); if (r && r.target !== 'self') { UI.sheet = null; openSheet({ step: 'sendnow', id: rid }); } else { UI.tab = 'rem'; renderView(true); renderNav(); } }); }
   if (UI.askBio) { UI.askBio = false; setTimeout(offerBio, 1200); }
   if (UI.startAdd) { const k = UI.startAdd; UI.startAdd = null; setTimeout(() => { if (S && !UI.sheet) openSheet(k === 'in' || k === 'out' ? newCash(k) : newSlip(k, null)); }, 350); }
   try { if (location.search) history.replaceState(null, '', location.pathname); } catch {}
@@ -682,6 +683,19 @@ function cashDetailHTML(s) {
   <div class="kv"><span>Description</span><span>${c.note ? esc(c.note) : '—'}</span></div>
   <div class="acts"><button class="btn ghost danger" data-a="cash-delete" data-id="${c.id}">Delete</button><button class="btn primary" data-a="cash-edit" data-id="${c.id}">Edit</button></div>`;
 }
+function markSent(r) {
+  const now = Date.now(); const o = { t: 'rem', ...r, last_sent: now };
+  if (r.repeat_type === 'once') o.status = 'sent'; else { let nx = nextSend(r.send_at, r.repeat_type, r.repeat_n); for (let i = 0; nx <= now && i < 1000; i++) nx = nextSend(nx, r.repeat_type, r.repeat_n); o.send_at = nx; o.status = 'active'; }
+  op(o);
+}
+function sendNowHTML(s) {
+  const r = S.data.reminders.find((x) => x.id === s.id); if (!r) return '<div class="empty">This reminder is gone.</div>';
+  const p = partyById(r.party_id);
+  return `<div class="sh-head"><h3>Send this message?<small>To ${esc(p?.name || '')}${p?.phone ? ' · +91 ' + esc(p.phone) : ''}</small></h3><button class="ibtn" data-a="close" aria-label="Close">${ic('x')}</button></div>
+  <div class="quote">${esc(r.message)}</div>
+  <div class="mu" style="font-size:12.5px;margin-top:10px;line-height:1.5">WhatsApp opens with this message typed in. You only press its send button.</div>
+  <div class="acts"><button class="btn ghost" data-a="sn-snooze" data-id="${r.id}">Remind me in 1 hour</button><button class="btn green" data-a="sn-send" data-id="${r.id}">${ic('wa')}&nbsp; Send</button></div>`;
+}
 function budgetHTML(s) {
   const f = s.f; const nm = { monthly: 'monthly', yearly: 'yearly', lifetime: 'lifetime' }[f.period];
   return `<div class="sh-head"><h3>Set ${nm} budget<small>The most you plan to spend. Leave empty to remove it.</small></h3><button class="ibtn" data-a="close" aria-label="Close">${ic('x')}</button></div>
@@ -711,7 +725,7 @@ function renderSheet() {
     if (p) { p.classList.add('out'); const sc = $('#sheet .scrim'); if (sc) sc.classList.add('out'); setTimeout(() => { if (!UI.sheet) el.innerHTML = ''; }, 270); } else el.innerHTML = '';
     return;
   }
-  const body = s.step === 'slip' ? slipHTML(s) : s.step === 'msg' ? msgHTML(s) : s.step === 'sched' ? schedHTML(s) : s.step === 'pin' ? pinHTML(s) : s.step === 'cash' ? cashHTML(s) : s.step === 'cashnote' ? cashNoteHTML(s) : s.step === 'cashdetail' ? cashDetailHTML(s) : s.step === 'budget' ? budgetHTML(s) : detailHTML(s);
+  const body = s.step === 'slip' ? slipHTML(s) : s.step === 'msg' ? msgHTML(s) : s.step === 'sched' ? schedHTML(s) : s.step === 'pin' ? pinHTML(s) : s.step === 'cash' ? cashHTML(s) : s.step === 'cashnote' ? cashNoteHTML(s) : s.step === 'cashdetail' ? cashDetailHTML(s) : s.step === 'budget' ? budgetHTML(s) : s.step === 'sendnow' ? sendNowHTML(s) : detailHTML(s);
   const panel = $('#sheet .panel');
   if (panel && !panel.classList.contains('out')) {
     panel.innerHTML = `<div class="grab"></div><div class="swap">${body}</div>`; panel.scrollTop = 0;
@@ -944,10 +958,10 @@ document.addEventListener('click', async (e) => {
       const r = S.data.reminders.find((x) => x.id === id); const p = partyById(r.party_id);
       if (!p?.phone) return toast('No mobile number saved for this party');
       window.open(waLink(p.phone, r.message), '_blank', 'noopener');
-      const now = Date.now(); const o = { t: 'rem', ...r, last_sent: now };
-      if (r.repeat_type === 'once') o.status = 'sent'; else { let nx = nextSend(r.send_at, r.repeat_type, r.repeat_n); for (let i = 0; nx <= now && i < 1000; i++) nx = nextSend(nx, r.repeat_type, r.repeat_n); o.send_at = nx; o.status = 'active'; }
-      op(o); break;
+      markSent(r); break;
     }
+    case 'sn-send': { const r = S.data.reminders.find((x) => x.id === id); const p = r && partyById(r.party_id); if (!p?.phone) return toast('No mobile number saved for this party'); window.open(waLink(p.phone, r.message), '_blank', 'noopener'); markSent(r); closeSheet(); toast('Marked as sent'); break; }
+    case 'sn-snooze': { const r = S.data.reminders.find((x) => x.id === id); if (r) op({ t: 'rem', ...r, send_at: Date.now() + 3600000 }); closeSheet(); toast('I will remind you again in 1 hour'); break; }
     case 'rem-retry': { const r = S.data.reminders.find((x) => x.id === id); op({ t: 'rem', ...r, status: 'active', send_at: Date.now() + 60000 }); toast('Will retry in a minute'); break; }
     case 'rem-del': if (await ask('Delete reminder?', 'It will not be sent.')) { op({ t: 'rem_del', id }); toast('Reminder deleted'); } break;
     case 'push-on': await enablePush(); break;
@@ -1012,6 +1026,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 (function boot() {
   applyTheme();
   const q = new URLSearchParams(location.search).get('tab'); if (TABS.includes(q)) UI.startTab = q;
+  const qs = new URLSearchParams(location.search).get('send'); if (qs && /^[\w-]{6,64}$/.test(qs)) UI.startSend = qs;
   const qa = new URLSearchParams(location.search).get('add'); if (['gave', 'took', 'in', 'out'].includes(qa)) UI.startAdd = qa;
   if (CFG.salt && CFG.phone && localStorage.getItem(CK)) { renderLock(); return; }
   renderAuth(); loadStatus();

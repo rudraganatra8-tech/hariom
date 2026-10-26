@@ -26,7 +26,8 @@ Tables and encryption keys are created automatically the first time the app runs
 * **More** tab: Monthly, Yearly or Lifetime view, an optional budget for each, and every category as its own section with its entries.
 * **Quick unlock** (You tab): fingerprint, Face ID or the phone's own screen lock. The app password always works too.
 * **Shortcuts**: long-press the installed app icon for Add expense, Add income, You Gave, You Took.
-* Reminders and WhatsApp work as before (Remind tab).
+* **Free WhatsApp reminders (no Meta account needed):** when a message is due, a notification says "Send this to Ramesh?". Tap it, unlock (Face ID / fingerprint), check the message, press **Send**. WhatsApp opens with the chat and text ready and you press its send button. If you ignore it, you are nudged again every hour (3 times). Works with normal WhatsApp or WhatsApp Business.
+* Automatic sending without any tap is optional and paid by Meta (about 15 paise per message), see the last section.
 
 ## Security
 

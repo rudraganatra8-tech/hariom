@@ -647,9 +647,9 @@ async function vapidJwt(env, aud) {
   return { jwt: `${head}.${claims}.${b64u(sig)}`, pub: v.pub };
 }
 
-async function notify(env, uid, title, body) {
+async function notify(env, uid, title, body, url = '/?tab=rem') {
   const id = crypto.randomUUID();
-  const d = await encField(env, { title, body: String(body).slice(0, 500), url: '/?tab=rem' }, `notif:${id}:${uid}`);
+  const d = await encField(env, { title, body: String(body).slice(0, 500), url }, `notif:${id}:${uid}`);
   await env.DB.prepare('INSERT INTO notifs(id,user_id,d,created_at,shown) VALUES(?,?,?,?,0)').bind(id, uid, d, Date.now()).run();
 }
 
@@ -776,11 +776,11 @@ export async function runReminders(env) {
             await fail(String(e.message));
           }
         }
-      } else if (r.notified !== r.send_at) {
-        // WhatsApp is not connected: tell the owner it is time, one tap sends it from the app
-        await notify(env, r.user_id, `Time to message ${party.name}`, message);
+      } else if (!r.notified || (now - r.notified >= 3600000 && now - r.send_at < 3 * 3600000 + 60000)) {
+        // WhatsApp is not connected: ask the owner to confirm. Nudge again every hour (3 times) until it is sent.
+        await notify(env, r.user_id, `Send this to ${party.name}?`, message, '/?send=' + r.id);
         toPush.add(r.user_id);
-        await env.DB.prepare('UPDATE reminders SET notified=? WHERE id=?').bind(r.send_at, r.id).run();
+        await env.DB.prepare('UPDATE reminders SET notified=? WHERE id=?').bind(now, r.id).run();
       }
     } catch (e) {
       await fail('Could not read this reminder');

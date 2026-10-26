@@ -422,3 +422,5 @@ html{-webkit-text-size-adjust:100%}
 .iosnote{margin:14px 4px 0;padding:13px 15px;border-radius:18px;background:var(--soft);border:1px solid var(--ln);font-size:13px;line-height:1.55;color:var(--mu)}
 .iosnote b{color:var(--tx)}
 .lock .btn.primary+.or{color:var(--mu);font-size:12px;margin:14px 0 4px;text-align:center}
+
+.quote{padding:16px 18px;border-radius:20px;background:var(--soft);border:1px solid var(--ln);font-size:15.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word}

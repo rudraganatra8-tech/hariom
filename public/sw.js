@@ -1,5 +1,5 @@
 // Hari Om service worker: opens the app instantly, works offline, and shows your reminder notifications.
-const CACHE = 'hariom-v7';
+const CACHE = 'hariom-v8';
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/theme.js', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -52,6 +52,8 @@ self.addEventListener('push', (e) => {
           tag: n.id || 'hariom',
           data: { url: n.url || '/' },
           vibrate: [60, 40, 60],
+          actions: String(n.url || '').includes('send=') ? [{ action: 'open', title: 'Review and send' }] : [],
+          requireInteraction: String(n.url || '').includes('send='),
         });
       }
     })()
