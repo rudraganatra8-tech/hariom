@@ -54,6 +54,11 @@ const ic = (n) => `<svg class="i" viewBox="0 0 24 24">${ICON[n]}</svg>`;
 
 // ---------- local encryption (your data is locked on this phone with your PIN) ----------
 const te = new TextEncoder(), td = new TextDecoder();
+const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const STANDALONE = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+const BIO_NAME = IOS ? 'Face ID / Touch ID' : 'fingerprint / face';
+let deferredInstall = null;
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
 const b64e = (u8) => { let s = ''; for (const x of u8) s += String.fromCharCode(x); return btoa(s); };
 const b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 async function deriveKey(pin, saltB64) {
@@ -213,9 +218,9 @@ window.addEventListener('popstate', () => {
 let toastT;
 function toast(msg) { const t = $('#toast'); if (!t) return; t.textContent = msg; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2600); }
 function burst() { const b = $('#burst'); if (!b) return; hap([14, 50, 14]); b.classList.remove('on'); void b.offsetWidth; b.classList.add('on'); }
-function ask(title, text, ok = 'Delete') {
+function ask(title, text, ok = 'Delete', cls = 'red') {
   return new Promise((res) => {
-    const d = $('#dlg'); d.innerHTML = `<div class="box"><h4>${esc(title)}</h4><p>${esc(text)}</p><div class="acts" style="margin:0"><button class="btn ghost" data-d="0">Cancel</button><button class="btn red" data-d="1">${esc(ok)}</button></div></div>`;
+    const d = $('#dlg'); d.innerHTML = `<div class="box"><h4>${esc(title)}</h4><p>${esc(text)}</p><div class="acts" style="margin:0"><button class="btn ghost" data-d="0">Cancel</button><button class="btn ${cls}" data-d="1">${esc(ok)}</button></div></div>`;
     d.classList.add('on');
     d.onclick = (e) => { const b = e.target.closest('[data-d]'); if (!b && e.target !== d) return; d.classList.remove('on'); d.onclick = null; res(b ? b.dataset.d === '1' : false); };
   });
@@ -261,6 +266,7 @@ function authView() {
     <div class="err" id="a-err">${esc(UI.err)}</div>
     <button class="btn primary" style="width:100%;margin-top:6px" data-a="auth-go">${m === 'register' ? 'Create account' : forgot ? 'Reset password' : 'Log in'}</button>
   </div></div>
+  ${IOS && !STANDALONE ? '<div class="iosnote"><b>On iPhone:</b> tap the Share button, choose <b>Add to Home Screen</b>, then open Hari Om from your home screen. That is needed for Face ID unlock and notifications.</div>' : ''}
   ${m === 'login' ? `<a class="link" data-a="mode" data-v="forgot">Forgot password? <b>Use recovery key</b></a>` : forgot ? `<a class="link" data-a="mode" data-v="login">Back to <b>log in</b></a>` : ''}</div>`;
 }
 function renderAuth() { UI.shell = false; $('#app').innerHTML = authView(); }
@@ -290,7 +296,7 @@ async function authGo() {
 }
 async function afterAuth(phone, pin, recoveryKey) {
   CFG.phone = phone; CFG.salt = b64e(crypto.getRandomValues(new Uint8Array(16))); CFG.fails = 0; saveCfg();
-  K = await deriveKey(pin, CFG.salt); PIN = pin; S = emptyS(); await sealCache(); UI.err = '';
+  K = await deriveKey(pin, CFG.salt); PIN = pin; S = emptyS(); await sealCache(); UI.err = ''; UI.askBio = true;
   if (recoveryKey) { UI.recovery = recoveryKey; renderAuth(); } else enterApp();
 }
 function forceAuth(msg) {
@@ -302,11 +308,12 @@ async function logout() {
 }
 
 function lockView(msg) {
-  return `<div class="lock enter"><div class="om">ॐ</div><h1>Hari Om</h1><p id="lock-sub">${esc(msg || 'Enter your password')}</p>
-  <div class="card" style="width:100%;max-width:340px">${pwField('l-pw', 'Password', 'current-password')}<button class="btn primary" style="width:100%;margin-top:12px" data-a="unlock">Unlock</button>${CFG.bio ? `<button class="btn ghost" style="width:100%;margin-top:10px" data-a="bio-unlock">${ic('lock')}&nbsp; Use fingerprint / face</button>` : ''}</div>
+  const bio = CFG.bio ? `<button class="btn primary" style="width:100%" data-a="bio-unlock">${ic('lock')}&nbsp; Unlock with ${BIO_NAME}</button><div class="or">or use your password</div>` : '';
+  return `<div class="lock enter"><div class="om">ॐ</div><h1>Hari Om</h1><p id="lock-sub">${esc(msg || (CFG.bio ? 'Welcome back' : 'Enter your password'))}</p>
+  <div class="card" style="width:100%;max-width:340px">${bio}${pwField('l-pw', 'Password', 'current-password')}<button class="btn ${CFG.bio ? 'ghost' : 'primary'}" style="width:100%;margin-top:12px" data-a="unlock">Unlock</button></div>
   <a class="link" data-a="relogin">Forgot password? <b>Log in again</b></a></div>`;
 }
-function renderLock(msg) { UI.shell = false; $('#app').innerHTML = lockView(msg); setTimeout(() => { if (CFG.bio && !msg) bioTry(); else { const i = $('#l-pw'); if (i) i.focus(); } }, 120); }
+function renderLock(msg) { UI.shell = false; $('#app').innerHTML = lockView(msg); setTimeout(() => { if (CFG.bio && !msg && !IOS) bioTry(); else { const i = $('#l-pw'); if (i) i.focus(); } }, 120); }
 async function bioTry() { if (!CFG.bio || UI.unlocking || !$('.lock')) return; try { const pw = await bioUnlock(); await doUnlock(pw); } catch (e) { console.debug('quick unlock:', e && e.name, e && e.message); const i = $('#l-pw'); if (i) i.focus(); } }
 async function doUnlock(override) {
   const inp = $('#l-pw'); if (!inp || UI.unlocking) return;
@@ -329,10 +336,18 @@ async function doUnlock(override) {
 async function lockNow() {
   await sealCache(); S = null; K = null; PIN = ''; UI.layers = []; UI.sheet = null; renderLock();
 }
+async function offerBio() {
+  if (!S || CFG.bio || CFG.bioAsked || UI.sheet || UI.menu) return;
+  if (!(await bioAvailable())) return;
+  CFG.bioAsked = true; saveCfg();
+  if (!(await ask('Unlock with ' + BIO_NAME + '?', 'Next time you open Hari Om you can use ' + (IOS ? 'Face ID or Touch ID' : 'your fingerprint, face or phone lock') + ' instead of typing the password. You can change this any time in the You tab.', 'Turn on', 'primary'))) return;
+  try { await bioEnable(PIN); toast('Quick unlock is on'); burst(); if (UI.tab === 'me') renderView(false); } catch { bioClear(); toast('Could not turn it on. You can try again in the You tab.'); }
+}
 function enterApp() {
   if (S) { S.data.cash = S.data.cash || []; S.data.cats = S.data.cats || []; }
   UI.tab = UI.startTab || (CFG.tab && CFG.tab !== 'me' ? CFG.tab : 'home'); UI.startTab = null; UI.shell = false;
   renderAll(); sync();
+  if (UI.askBio) { UI.askBio = false; setTimeout(offerBio, 1200); }
   if (UI.startAdd) { const k = UI.startAdd; UI.startAdd = null; setTimeout(() => { if (S && !UI.sheet) openSheet(k === 'in' || k === 'out' ? newCash(k) : newSlip(k, null)); }, 350); }
   try { if (location.search) history.replaceState(null, '', location.pathname); } catch {}
 }
@@ -433,7 +448,7 @@ function meView() {
   const perm = pushSupported() ? Notification.permission : 'unsupported';
   const pushOn = perm === 'granted' && me && me.subs > 0;
   let ntext = 'Get alerts on this phone for your reminders, even when the app is closed.', nbtn = `<button class="btn primary" data-a="push-on">Turn on notifications</button>`;
-  if (perm === 'unsupported') { ntext = 'This browser does not support notifications. Open Hari Om in Chrome on Android.'; nbtn = ''; }
+  if (perm === 'unsupported') { ntext = IOS ? (STANDALONE ? 'Notifications need iOS 16.4 or newer. Please update your iPhone.' : 'On iPhone, first tap Share > Add to Home Screen, then open Hari Om from your home screen and come back here.') : 'This browser does not support notifications. Open Hari Om in Chrome.'; nbtn = ''; }
   else if (perm === 'denied') { ntext = 'Notifications are blocked. Allow them for this site in your browser settings, then come back.'; nbtn = ''; }
   else if (me && !me.vapid) { ntext = 'Push keys are not set on the server yet. Finish step 2 of the README.'; nbtn = ''; }
   else if (pushOn) { ntext = 'Notifications are on for this phone.'; nbtn = `<div class="acts" style="margin:0"><button class="btn ghost" data-a="push-test">Send a test</button><button class="btn ghost danger" data-a="push-off">Turn off</button></div>`; }
@@ -442,8 +457,9 @@ function meView() {
     <div class="setcol"><b>Notifications</b><div class="mu" style="font-size:13px;line-height:1.55">${esc(ntext)}</div>${nbtn}</div>
     <div class="setcol"><b>Appearance</b>${seg('theme', [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Auto']], CFG.theme || 'light', true)}</div>
     <div class="setcol"><b>Lock the app after</b>${seg('lockmin', [['1', '1 min'], ['5', '5 min'], ['15', '15 min']], String(CFG.lockMin || 5), true)}<div class="mu" style="font-size:12.5px">When you leave the app for this long it asks for your password again.</div></div>
-    <div class="setrow"><div class="pm"><b>Quick unlock</b><small>Fingerprint, face or phone lock instead of typing</small></div><button class="sw ${CFG.bio ? 'on' : ''}" data-a="bio-toggle" aria-label="Toggle quick unlock"></button></div>
-    <div class="setrow"><div class="pm"><b>Vibration feedback</b><small>A tiny buzz when you tap</small></div><button class="sw ${CFG.haptics === false ? '' : 'on'}" data-a="toggle-hap" aria-label="Toggle vibration"></button></div>
+    <div class="setrow"><div class="pm"><b>Quick unlock</b><small>${IOS ? 'Face ID or Touch ID instead of typing' : 'Fingerprint, face or phone lock instead of typing'}</small></div><button class="sw ${CFG.bio ? 'on' : ''}" data-a="bio-toggle" aria-label="Toggle quick unlock"></button></div>
+    ${deferredInstall && !STANDALONE ? `<button class="btn primary" data-a="install">Install Hari Om on this phone</button>` : ''}
+    ${navigator.vibrate ? `<div class="setrow"><div class="pm"><b>Vibration feedback</b><small>A tiny buzz when you tap</small></div><button class="sw ${CFG.haptics === false ? '' : 'on'}" data-a="toggle-hap" aria-label="Toggle vibration"></button></div>` : ''}
     <div class="tile"><small>Sync status</small><b id="syncTxt">${UI.status === 'ok' ? 'Synced' : UI.status === 'off' ? 'Offline' : 'Idle'}</b><em>${pend ? pend + ' change(s) waiting to upload' : 'Everything is saved on the server'}</em></div>
     <div class="note"><b>WhatsApp</b><br>${me && me.wa ? 'Connected. Messages to your parties are sent automatically at the time you pick.' : 'Not connected yet. When a message is due you get a notification, and <b>Send now</b> in Reminders opens WhatsApp with it ready.'}</div>
     <button class="btn ghost" data-a="lock-now">${ic('lock')}&nbsp; Lock now</button>
@@ -833,9 +849,10 @@ document.addEventListener('click', async (e) => {
   switch (a) {
     case 'unlock': doUnlock(); break;
     case 'bio-unlock': bioTry(); break;
+    case 'install': if (deferredInstall) { deferredInstall.prompt(); deferredInstall = null; renderView(false); } break;
     case 'bio-toggle': {
       if (CFG.bio) { bioClear(); toast('Quick unlock is off'); renderView(false); break; }
-      if (!(await bioAvailable())) { toast('No fingerprint, face or screen lock is available on this phone or browser'); break; }
+      if (!(await bioAvailable())) { toast(IOS ? 'Face ID or Touch ID is not available. Open Hari Om from your Home Screen icon and make sure a passcode is set.' : 'No fingerprint, face or screen lock is available on this phone or browser'); break; }
       try { await bioEnable(PIN); toast('Quick unlock is on'); burst(); } catch { bioClear(); toast('Could not turn it on'); }
       renderView(false); break;
     }

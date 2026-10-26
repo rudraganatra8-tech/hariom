@@ -30,7 +30,7 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 
 /* ---------- layout ---------- */
-#view{padding:20px 18px 160px}
+#view{padding:calc(20px + env(safe-area-inset-top)) 18px 160px}
 .enter{animation:up .42s cubic-bezier(.2,.85,.2,1)}
 @keyframes up{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
 .list>*{animation:up .45s cubic-bezier(.2,.85,.2,1) both;animation-delay:calc(var(--k,0)*45ms)}
@@ -416,3 +416,9 @@ textarea.inp{resize:vertical;min-height:130px;line-height:1.55}
 .fsvg .gl.axis{stroke:var(--tx);stroke-dasharray:none;opacity:.35}
 .fsvg .bar.stub.g{fill:var(--gr)} .fsvg .bar.stub.r{fill:var(--rd)} .fsvg .bar.stub.p{fill:var(--pu)}
 .fsvg .bar.stub{filter:none;opacity:.5}
+
+html{-webkit-text-size-adjust:100%}
+.inp,input,textarea{font-size:16px}
+.iosnote{margin:14px 4px 0;padding:13px 15px;border-radius:18px;background:var(--soft);border:1px solid var(--ln);font-size:13px;line-height:1.55;color:var(--mu)}
+.iosnote b{color:var(--tx)}
+.lock .btn.primary+.or{color:var(--mu);font-size:12px;margin:14px 0 4px;text-align:center}

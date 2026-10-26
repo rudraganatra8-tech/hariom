@@ -229,6 +229,13 @@ async function boot(env) {
   return Object.keys(o).length ? Object.assign(Object.create(env), o) : env;
 }
 
+// The first account is the admin. Only the admin's reminders go out through the server's WhatsApp connection,
+// everyone else gets a notification and sends with one tap, so nobody can send messages from someone else's number.
+async function adminId(env) {
+  return (await env.DB.prepare('SELECT id FROM users ORDER BY created_at, rowid LIMIT 1').first())?.id || null;
+}
+const waConfigured = (env) => !!(env.WA_TOKEN && env.WA_PHONE_ID && env.WA_TEMPLATE);
+
 // ---------- API ----------
 async function api(req, env, url) {
   const path = url.pathname;
@@ -236,7 +243,7 @@ async function api(req, env, url) {
 
   if (req.method === 'GET' && path === '/api/status') {
     const r = await env.DB.prepare('SELECT COUNT(*) AS n FROM users').first();
-    return json({ hasUser: (r?.n || 0) > 0, ready: true });
+    return json({ hasUser: (r?.n || 0) > 0, ready: true, signup: (r?.n || 0) < Math.max(1, parseInt(env.MAX_USERS, 10) || 100) });
   }
   if (req.method !== 'POST') return json({ error: 'Not found' }, 404);
 
@@ -272,21 +279,30 @@ async function api(req, env, url) {
     const pinSalt = newSalt();
     const recSalt = newSalt();
     const recoveryKey = makeRecoveryKey();
-    const res = await env.DB.prepare(
-      `INSERT INTO users(id,phone_h,pin_hash,pin_salt,recovery_hash,recovery_salt,created_at)
-       SELECT ?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM users)`
-    )
-      .bind(
-        id,
-        await phoneHash(env, phone),
-        await hashSecret(env, pin, pinSalt),
-        pinSalt,
-        await hashSecret(env, recoveryKey, recSalt),
-        recSalt,
-        Date.now()
+    if (await limited(env, 'reg:' + ip, 5, 60 * 60000)) return json({ error: 'Too many new accounts from this connection. Try again later.' }, 429);
+    const maxUsers = Math.max(1, parseInt(env.MAX_USERS, 10) || 100);
+    let res;
+    try {
+      res = await env.DB.prepare(
+        `INSERT INTO users(id,phone_h,pin_hash,pin_salt,recovery_hash,recovery_salt,created_at)
+         SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM users) < ?`
       )
-      .run();
-    if (!res.meta || res.meta.changes !== 1) return json({ error: 'This app already has an owner. Please log in.' }, 403);
+        .bind(
+          id,
+          await phoneHash(env, phone),
+          await hashSecret(env, pin, pinSalt),
+          pinSalt,
+          await hashSecret(env, recoveryKey, recSalt),
+          recSalt,
+          Date.now(),
+          maxUsers
+        )
+        .run();
+    } catch (e) {
+      if (/UNIQUE/i.test(String(e && e.message))) return json({ error: 'That username is taken. Pick another one.' }, 409);
+      throw e;
+    }
+    if (!res.meta || res.meta.changes !== 1) return json({ error: 'Sign-ups are full on this server.' }, 403);
     return json({ username: phone, recoveryKey }, 200, [await startSession(env, id, secure)]);
   }
 
@@ -352,7 +368,7 @@ async function api(req, env, url) {
     const subs = await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subs WHERE user_id=?').bind(uid).first();
     return out({
       vapid: env.VAPID_JWK ? (await vapid(env)).pub : null,
-      wa: !!(env.WA_TOKEN && env.WA_PHONE_ID && env.WA_TEMPLATE),
+      wa: waConfigured(env) && (await adminId(env)) === uid,
       subs: subs?.n || 0,
     });
   }
@@ -722,7 +738,8 @@ export async function runReminders(env) {
   const { results } = await env.DB.prepare("SELECT * FROM reminders WHERE status='active' AND send_at<=? ORDER BY send_at LIMIT 20")
     .bind(now)
     .all();
-  const waOn = !!(env.WA_TOKEN && env.WA_PHONE_ID && env.WA_TEMPLATE);
+  const waAny = waConfigured(env);
+  const admin = waAny ? await adminId(env) : null;
   const toPush = new Set();
 
   for (const r of results) {
@@ -741,7 +758,7 @@ export async function runReminders(env) {
         continue;
       }
       const party = await decField(env, prow.d, `party:${r.party_id}:${r.user_id}`);
-      if (waOn) {
+      if (waAny && r.user_id === admin) {
         const to = waNumber(party.phone);
         if (!to) {
           await fail('This party has no mobile number saved');

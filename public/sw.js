@@ -1,5 +1,5 @@
 // Hari Om service worker: opens the app instantly, works offline, and shows your reminder notifications.
-const CACHE = 'hariom-v6';
+const CACHE = 'hariom-v7';
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/theme.js', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
