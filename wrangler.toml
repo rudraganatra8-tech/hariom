@@ -1,4 +1,4 @@
-name = "hariom-v1"
+name = "hariom-v2"
 main = "src/worker.js"
 compatibility_date = "2025-01-01"
 
