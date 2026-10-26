@@ -487,6 +487,58 @@ async function applyOps(env, uid, ops) {
       case 'rem_del':
         stmts.push(db.prepare('DELETE FROM reminders WHERE id=? AND user_id=?').bind(o.id, uid));
         break;
+      case 'cash': {
+        const amount = Number(o.amount);
+        const category = str(o.category, 40).trim();
+        if (!['in', 'out'].includes(o.kind) || !category || !Number.isFinite(amount) || amount <= 0 || amount > 1e12) break;
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(o.at || '')) break;
+        const d = await encField(
+          env,
+          { kind: o.kind, amount: Math.round(amount * 100) / 100, category, at: o.at, note: str(o.note, 5000) },
+          `cash:${o.id}:${uid}`
+        );
+        stmts.push(
+          db
+            .prepare('INSERT INTO cash(id,user_id,d,created_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET d=excluded.d WHERE cash.user_id=excluded.user_id')
+            .bind(o.id, uid, d, now)
+        );
+        break;
+      }
+      case 'cash_del':
+        stmts.push(db.prepare('DELETE FROM cash WHERE id=? AND user_id=?').bind(o.id, uid));
+        break;
+      case 'cat': {
+        const name = str(o.name, 30).trim();
+        if (!['in', 'out'].includes(o.kind) || !name) break;
+        const n = await db.prepare('SELECT COUNT(*) AS n FROM cats WHERE user_id=?').bind(uid).first();
+        if ((n?.n || 0) >= 60) break;
+        const d = await encField(env, { kind: o.kind, name }, `cat:${o.id}:${uid}`);
+        stmts.push(
+          db
+            .prepare('INSERT INTO cats(id,user_id,d,created_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET d=excluded.d WHERE cats.user_id=excluded.user_id')
+            .bind(o.id, uid, d, now)
+        );
+        break;
+      }
+      case 'budget': {
+        const per = ['monthly', 'yearly', 'lifetime'].includes(o.period) ? o.period : null;
+        if (!per || o.id !== 'budget-' + per) break;
+        const amt = Number(o.amount);
+        if (!(amt > 0) || amt > 1e12) {
+          stmts.push(db.prepare('DELETE FROM cats WHERE id=? AND user_id=?').bind(o.id, uid));
+          break;
+        }
+        const d = await encField(env, { kind: 'budget', name: String(Math.round(amt * 100) / 100) }, `cat:${o.id}:${uid}`);
+        stmts.push(
+          db
+            .prepare('INSERT INTO cats(id,user_id,d,created_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET d=excluded.d WHERE cats.user_id=excluded.user_id')
+            .bind(o.id, uid, d, now)
+        );
+        break;
+      }
+      case 'cat_del':
+        stmts.push(db.prepare('DELETE FROM cats WHERE id=? AND user_id=?').bind(o.id, uid));
+        break;
     }
   }
   for (let i = 0; i < stmts.length; i += 50) await db.batch(stmts.slice(i, i + 50));
@@ -494,13 +546,29 @@ async function applyOps(env, uid, ops) {
 
 async function loadState(env, uid) {
   const db = env.DB;
-  const [p, t, r] = await db.batch([
+  const [p, t, r, c1, c2] = await db.batch([
     db.prepare('SELECT id,d FROM parties WHERE user_id=?').bind(uid),
     db.prepare('SELECT id,party_id,d FROM txns WHERE user_id=?').bind(uid),
     db
       .prepare('SELECT id,target,party_id,txn_id,d,send_at,repeat_type,repeat_n,status,last_sent,last_error FROM reminders WHERE user_id=?')
       .bind(uid),
+    db.prepare('SELECT id,d FROM cash WHERE user_id=?').bind(uid),
+    db.prepare('SELECT id,d FROM cats WHERE user_id=?').bind(uid),
   ]);
+  const cash = [];
+  const cats = [];
+  for (const x of c1.results) {
+    try {
+      const v = await decField(env, x.d, `cash:${x.id}:${uid}`);
+      cash.push({ id: x.id, kind: v.kind, amount: v.amount, category: v.category, at: v.at, note: v.note });
+    } catch {}
+  }
+  for (const x of c2.results) {
+    try {
+      const v = await decField(env, x.d, `cat:${x.id}:${uid}`);
+      cats.push({ id: x.id, kind: v.kind, name: v.name });
+    } catch {}
+  }
   const parties = [];
   const txns = [];
   const reminders = [];
@@ -523,7 +591,7 @@ async function loadState(env, uid) {
       reminders.push({ ...rest, message: v.message });
     } catch {}
   }
-  return { parties, txns, reminders };
+  return { parties, txns, reminders, cash, cats };
 }
 
 // ---------- push notifications to your own phone (Web Push, VAPID, no message body goes through the push service) ----------

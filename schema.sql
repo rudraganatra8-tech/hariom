@@ -80,3 +80,20 @@ CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL                    -- auto-generated keys (only used when you did not set them as Cloudflare secrets)
 );
+
+CREATE TABLE IF NOT EXISTS cash (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  d TEXT NOT NULL,                   -- encrypted: income/expense, amount, category, date/time, description
+  created_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS cats (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  d TEXT NOT NULL,                   -- encrypted: your own income/expense category names
+  created_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_cash_user ON cash(user_id);
+CREATE INDEX IF NOT EXISTS idx_cats_user ON cats(user_id);

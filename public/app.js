@@ -8,8 +8,8 @@ const saveCfg = () => { try { localStorage.setItem(CFGK, JSON.stringify(CFG)); }
 let S = null;      // { data:{parties,txns,reminders}, outbox:[] }  only in memory while unlocked
 let K = null;      // local encryption key (derived from your PIN, never stored)
 let PIN = '';      // kept in memory only, to log in again silently when the session expires
-const emptyS = () => ({ data: { parties: [], txns: [], reminders: [] }, outbox: [] });
-const TABS = ['home', 'recv', 'pay', 'rem', 'me'];
+const emptyS = () => ({ data: { parties: [], txns: [], reminders: [], cash: [], cats: [] }, outbox: [] });
+const TABS = ['home', 'recv', 'pay', 'more', 'rem', 'me'];
 const UI = { tab: 'home', layers: [], sheet: null, status: 'idle', mode: 'login', hasUser: true, ready: true, recovery: null, remTab: 'up', pfilter: 'all', err: '', pinBuf: '', me: null, counts: {}, shell: false, startTab: null };
 
 // ---------- helpers ----------
@@ -43,6 +43,10 @@ const ICON = {
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   wa: '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
+  dots: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  inc: '<path d="M22 7l-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/>',
+  exp: '<path d="M22 17l-8.5-8.5-5 5L2 7"/><path d="M16 17h6v-6"/>',
+  next: '<path d="M9 18l6-6-6-6"/>',
   eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
 };
@@ -69,8 +73,37 @@ async function openCache(key) {
   return JSON.parse(td.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: u.slice(0, 12) }, key, u.slice(12))));
 }
 let ptimer;
+// ---------- quick unlock: fingerprint / face / phone screen lock (WebAuthn, handled by the phone itself) ----------
+const rnd = (n) => crypto.getRandomValues(new Uint8Array(n));
+function idb() { return new Promise((res, rej) => { const r = indexedDB.open('hariom-bio', 1); r.onupgradeneeded = () => r.result.createObjectStore('k'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function idbGet(k) { const db = await idb(); return new Promise((res, rej) => { const q = db.transaction('k').objectStore('k').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
+async function idbPut(k, v) { const db = await idb(); return new Promise((res, rej) => { const t = db.transaction('k', 'readwrite'); t.objectStore('k').put(v, k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); }); }
+async function idbDel(k) { try { const db = await idb(); db.transaction('k', 'readwrite').objectStore('k').delete(k); } catch {} }
+async function bioAvailable() {
+  try { return !!(window.PublicKeyCredential && navigator.credentials && (await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())); } catch { return false; }
+}
+async function bioStore(pw) {
+  let key = await idbGet('key');
+  if (!key) { key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']); await idbPut('key', key); }
+  const iv = rnd(12); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, te.encode(pw)));
+  const all = new Uint8Array(12 + ct.length); all.set(iv); all.set(ct, 12); return b64e(all);
+}
+async function bioEnable(pw) {
+  const cred = await navigator.credentials.create({ publicKey: {
+    challenge: rnd(32), rp: { name: 'Hari Om' }, user: { id: rnd(16), name: CFG.phone || 'owner', displayName: 'Hari Om' },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' }, timeout: 60000 } });
+  if (!cred) throw new Error('cancelled');
+  CFG.bio = { id: b64e(new Uint8Array(cred.rawId)), blob: await bioStore(pw) }; saveCfg();
+}
+async function bioUnlock() {
+  await navigator.credentials.get({ publicKey: { challenge: rnd(32), allowCredentials: [{ type: 'public-key', id: b64d(CFG.bio.id), transports: ['internal'] }], userVerification: 'required', timeout: 60000 } });
+  const key = await idbGet('key'); const u = b64d(CFG.bio.blob);
+  return td.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: u.slice(0, 12) }, key, u.slice(12)));
+}
+function bioClear() { if (CFG.bio) { CFG.bio = null; saveCfg(); } idbDel('key'); }
 const persist = () => { clearTimeout(ptimer); ptimer = setTimeout(sealCache, 120); };
-function wipeLocal() { try { localStorage.removeItem(CK); } catch {} CFG.salt = null; CFG.fails = 0; saveCfg(); S = null; K = null; PIN = ''; }
+function wipeLocal() { bioClear(); try { localStorage.removeItem(CK); } catch {} CFG.salt = null; CFG.fails = 0; saveCfg(); S = null; K = null; PIN = ''; }
 
 // ---------- data ----------
 function applyOp(d, o) {
@@ -82,6 +115,11 @@ function applyOp(d, o) {
     case 'party_del': d.parties = d.parties.filter((x) => x.id !== o.id); d.txns = d.txns.filter((x) => x.party_id !== o.id); d.reminders = d.reminders.filter((x) => x.party_id !== o.id); break;
     case 'rem': up(d.reminders, { id: o.id, target: o.target || 'party', party_id: o.party_id || null, txn_id: o.txn_id || null, message: o.message, send_at: o.send_at, repeat_type: o.repeat_type, repeat_n: o.repeat_n, status: o.status || 'active', last_sent: o.last_sent || null, last_error: null }); break;
     case 'rem_del': d.reminders = d.reminders.filter((x) => x.id !== o.id); break;
+    case 'cash': up(d.cash, { id: o.id, kind: o.kind, amount: o.amount, category: o.category, at: o.at, note: o.note }); break;
+    case 'cash_del': d.cash = d.cash.filter((x) => x.id !== o.id); break;
+    case 'cat': up(d.cats, { id: o.id, kind: o.kind, name: o.name }); break;
+    case 'cat_del': d.cats = d.cats.filter((x) => x.id !== o.id); break;
+    case 'budget': if (o.amount > 0) up(d.cats, { id: o.id, kind: 'budget', name: String(o.amount) }); else d.cats = d.cats.filter((x) => x.id !== o.id); break;
   }
 }
 function op(o) { S.outbox.push(o); applyOp(S.data, o); persist(); renderAll(); scheduleSync(); }
@@ -144,7 +182,7 @@ async function sync(retried) {
     const r = await api('/api/sync', { ops });
     if (!S) return;
     S.outbox.splice(0, ops.length);
-    const d = { parties: r.parties, txns: r.txns, reminders: r.reminders };
+    const d = { parties: r.parties, txns: r.txns, reminders: r.reminders, cash: r.cash || [], cats: r.cats || [] };
     S.outbox.forEach((o) => applyOp(d, o));
     S.data = d; persist(); setStatus('ok'); renderAll();
   } catch (e) {
@@ -166,6 +204,7 @@ function closeSheet() { if (UI.sheet) history.back(); }
 function closeLayer() { if (UI.layers.length) history.back(); }
 window.addEventListener('popstate', () => {
   if (!S) return;
+  if (UI.menu) { hideMenu(); return; }
   if (UI.sheet) { UI.sheet = null; renderSheet(); }
   else if (UI.layers.length) { UI.layers.pop(); renderLayer(); }
 });
@@ -264,19 +303,21 @@ async function logout() {
 
 function lockView(msg) {
   return `<div class="lock enter"><div class="om">ॐ</div><h1>Hari Om</h1><p id="lock-sub">${esc(msg || 'Enter your password')}</p>
-  <div class="card" style="width:100%;max-width:340px">${pwField('l-pw', 'Password', 'current-password')}<button class="btn primary" style="width:100%;margin-top:12px" data-a="unlock">Unlock</button></div>
+  <div class="card" style="width:100%;max-width:340px">${pwField('l-pw', 'Password', 'current-password')}<button class="btn primary" style="width:100%;margin-top:12px" data-a="unlock">Unlock</button>${CFG.bio ? `<button class="btn ghost" style="width:100%;margin-top:10px" data-a="bio-unlock">${ic('lock')}&nbsp; Use fingerprint / face</button>` : ''}</div>
   <a class="link" data-a="relogin">Forgot password? <b>Log in again</b></a></div>`;
 }
-function renderLock(msg) { UI.shell = false; $('#app').innerHTML = lockView(msg); setTimeout(() => { const i = $('#l-pw'); if (i) i.focus(); }, 60); }
-async function doUnlock() {
+function renderLock(msg) { UI.shell = false; $('#app').innerHTML = lockView(msg); setTimeout(() => { if (CFG.bio && !msg) bioTry(); else { const i = $('#l-pw'); if (i) i.focus(); } }, 120); }
+async function bioTry() { if (!CFG.bio || UI.unlocking || !$('.lock')) return; try { const pw = await bioUnlock(); await doUnlock(pw); } catch (e) { console.debug('quick unlock:', e && e.name, e && e.message); const i = $('#l-pw'); if (i) i.focus(); } }
+async function doUnlock(override) {
   const inp = $('#l-pw'); if (!inp || UI.unlocking) return;
-  const pin = inp.value; if (!pin) return;
+  const pin = typeof override === 'string' ? override : inp.value; if (!pin) return;
   UI.unlocking = true;
   try {
     const key = await deriveKey(pin, CFG.salt);
     try {
       S = await openCache(key); K = key; PIN = pin; CFG.fails = 0; saveCfg(); UI.unlocking = false; enterApp(); return;
     } catch {
+      if (typeof override === 'string') { bioClear(); UI.unlocking = false; renderLock('Quick unlock was reset. Enter your password.'); return; }
       CFG.fails = (CFG.fails || 0) + 1; saveCfg();
       if (CFG.fails >= 5) { UI.unlocking = false; forceAuth('Too many wrong passwords. Log in again to continue.'); return; }
     }
@@ -289,8 +330,10 @@ async function lockNow() {
   await sealCache(); S = null; K = null; PIN = ''; UI.layers = []; UI.sheet = null; renderLock();
 }
 function enterApp() {
+  if (S) { S.data.cash = S.data.cash || []; S.data.cats = S.data.cats || []; }
   UI.tab = UI.startTab || (CFG.tab && CFG.tab !== 'me' ? CFG.tab : 'home'); UI.startTab = null; UI.shell = false;
   renderAll(); sync();
+  if (UI.startAdd) { const k = UI.startAdd; UI.startAdd = null; setTimeout(() => { if (S && !UI.sheet) openSheet(k === 'in' || k === 'out' ? newCash(k) : newSlip(k, null)); }, 350); }
   try { if (location.search) history.replaceState(null, '', location.pathname); } catch {}
 }
 
@@ -337,6 +380,8 @@ function homeView() {
     <div class="bar">${tot ? `<i class="bg" style="width:${gp}%"></i><i class="br" style="width:${100 - gp}%"></i>` : ''}</div>
     <div class="net"><span>Net position</span><b class="${net >= 0 ? 'g' : 'r'}">${net >= 0 ? '+' : '−'}${inr(net)}</b></div>
   </section>
+  <div class="secrow"><h2 class="sec">${(CFG.period || 'monthly') === 'yearly' ? 'This year' : (CFG.period || 'monthly') === 'lifetime' ? 'All time' : 'This month'}</h2><button class="lnk" data-a="tab" data-v="more">Income &amp; expenses ${ic('next')}</button></div>
+  ${flowCard(CFG.period || 'monthly', periodKey(CFG.period || 'monthly') === 'all' ? 'all' : (CFG.period === 'yearly' ? yearNow() : monthNow()), 'h')}
   <h2 class="sec">Summary</h2>
   <div class="tiles">
     ${due ? `<button class="tile wide" data-a="tab" data-v="rem" style="text-align:left"><small>Needs your attention</small><b>${due} reminder${due === 1 ? '' : 's'} due now</b><em>Tap to open</em></button>` : ''}
@@ -397,6 +442,7 @@ function meView() {
     <div class="setcol"><b>Notifications</b><div class="mu" style="font-size:13px;line-height:1.55">${esc(ntext)}</div>${nbtn}</div>
     <div class="setcol"><b>Appearance</b>${seg('theme', [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Auto']], CFG.theme || 'light', true)}</div>
     <div class="setcol"><b>Lock the app after</b>${seg('lockmin', [['1', '1 min'], ['5', '5 min'], ['15', '15 min']], String(CFG.lockMin || 5), true)}<div class="mu" style="font-size:12.5px">When you leave the app for this long it asks for your password again.</div></div>
+    <div class="setrow"><div class="pm"><b>Quick unlock</b><small>Fingerprint, face or phone lock instead of typing</small></div><button class="sw ${CFG.bio ? 'on' : ''}" data-a="bio-toggle" aria-label="Toggle quick unlock"></button></div>
     <div class="setrow"><div class="pm"><b>Vibration feedback</b><small>A tiny buzz when you tap</small></div><button class="sw ${CFG.haptics === false ? '' : 'on'}" data-a="toggle-hap" aria-label="Toggle vibration"></button></div>
     <div class="tile"><small>Sync status</small><b id="syncTxt">${UI.status === 'ok' ? 'Synced' : UI.status === 'off' ? 'Offline' : 'Idle'}</b><em>${pend ? pend + ' change(s) waiting to upload' : 'Everything is saved on the server'}</em></div>
     <div class="note"><b>WhatsApp</b><br>${me && me.wa ? 'Connected. Messages to your parties are sent automatically at the time you pick.' : 'Not connected yet. When a message is due you get a notification, and <b>Send now</b> in Reminders opens WhatsApp with it ready.'}</div>
@@ -432,21 +478,22 @@ function partyView(id) {
 }
 
 // ---------- shell + render ----------
-const NAV = [['home', 'Home'], ['recv', 'Receive'], ['pay', 'Pay'], ['bell', 'Remind'], ['user', 'You']];
+const NAV = [['home', 'Home'], ['recv', 'Receive'], ['pay', 'Pay'], ['dots', 'More'], ['bell', 'Remind'], ['user', 'You']];
 function buildShell() {
   $('#app').innerHTML = `<main id="view"></main>
   <button class="fab" id="fab" data-a="add" aria-label="Add transaction">${ic('plus')}</button>
-  <nav class="nav-container" id="nav" style="--n:5;--i:0"><span class="nav-ind"></span>
+  <nav class="nav-container" id="nav" style="--n:6;--i:0"><span class="nav-ind"></span>
    ${NAV.map(([ico, label], i) => `<a class="nav-item" data-a="tab" data-v="${TABS[i]}">${ico === 'bell' ? '<span class="badge" id="rbadge" style="display:none"></span>' : ''}${ic(ico)}${label}</a>`).join('')}
   </nav>
-  <div id="layer" class="layer" style="display:none"></div><div id="sheet"></div><div id="dlg"></div><div id="toast"></div>
+  <div id="menu"></div><div id="layer" class="layer" style="display:none"></div><div id="sheet"></div><div id="dlg"></div><div id="toast"></div>
   <div id="burst"><div class="c"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div></div>`;
   UI.shell = true;
 }
 function renderView(anim) {
   const v = $('#view'); if (!v || !S) return;
   const t = UI.tab;
-  v.innerHTML = t === 'home' ? homeView() : t === 'recv' ? listView('recv') : t === 'pay' ? listView('pay') : t === 'rem' ? remView() : meView();
+  FLOW_ANIM = !!anim; if (anim) for (const k of Object.keys(UI.counts)) if (k.startsWith('flow-')) delete UI.counts[k];
+  v.innerHTML = t === 'home' ? homeView() : t === 'recv' ? listView('recv') : t === 'pay' ? listView('pay') : t === 'more' ? moreView() : t === 'rem' ? remView() : meView();
   v.classList.toggle('noanim', !anim);
   v.querySelectorAll('.list').forEach((l) => [...l.children].forEach((c, i) => c.style.setProperty('--k', Math.min(i, 9))));
   if (anim) { v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter'); }
@@ -475,6 +522,170 @@ function renderAll() {
   renderLayer(); renderNav();
 }
 
+// ---------- income and expenses ----------
+let FLOW_ANIM = true;
+const DEF = {
+  in: ['Salary', 'Business', 'Freelance', 'Interest', 'Gift', 'Refund', 'Other'],
+  out: ['Food', 'Groceries', 'Travel', 'Fuel', 'Bills', 'Rent', 'Shopping', 'Health', 'Education', 'Entertainment', 'Other'],
+};
+const monthNow = () => ymd(new Date()).slice(0, 7);
+const monthLabel = (k) => { const [y, m] = k.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }); };
+const shiftMonth = (k, n) => { const [y, m] = k.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
+const inrC = (n) => (n >= 1e7 ? '₹' + +(n / 1e7).toFixed(1) + 'Cr' : n >= 1e5 ? '₹' + +(n / 1e5).toFixed(1) + 'L' : n >= 1e3 ? '₹' + +(n / 1e3).toFixed(1) + 'k' : '₹' + Math.round(n));
+const yearNow = () => String(new Date().getFullYear());
+const periodKey = (p) => (p === 'yearly' ? UI.cy || yearNow() : p === 'lifetime' ? 'all' : UI.cm || monthNow());
+const periodLabel = (p, k) => (p === 'yearly' ? k : p === 'lifetime' ? 'Lifetime' : monthLabel(k));
+const isCurrentPeriod = (p, k) => p === 'lifetime' || (p === 'yearly' ? k === yearNow() : k === monthNow());
+const inPeriod = (at, p, k) => (p === 'lifetime' ? true : p === 'yearly' ? at.slice(0, 4) === k : at.slice(0, 7) === k);
+function cashTotals(p, k) {
+  let income = 0, spent = 0;
+  for (const c of S.data.cash) if (inPeriod(c.at, p, k)) { if (c.kind === 'in') income += c.amount; else spent += c.amount; }
+  return { income: r2(income), spent: r2(spent) };
+}
+const budgetFor = (p) => { const c = S.data.cats.find((x) => x.id === 'budget-' + p); const v = c ? parseFloat(c.name) : 0; return v > 0 ? v : 0; };
+function flowCard(period, key, tag) {
+  const t = cashTotals(period, key); const left = r2(t.income - t.spent);
+  const W = 320, H = 196, pl = 40, pr = 10, pt = 12, base = 170; const max = Math.max(t.income, t.spent, Math.abs(left), 1);
+  const bw = 66, gap = (W - pl - pr - 3 * bw) / 2;
+  const bars = [['g', t.income], ['r', t.spent], ['p', Math.abs(left)]];
+  const grid = [0, 1, 2, 3].map((k) => { const y = +(base - (k * (base - pt)) / 3).toFixed(1); return `<line class="gl ${k === 0 ? 'axis' : ''}" x1="${pl - 6}" x2="${W - pr}" y1="${y}" y2="${y}"/><text class="ax" x="${pl - 10}" y="${y + 3.5}" text-anchor="end">${k === 0 ? '0' : inrC((max * k) / 3)}</text>`; }).join('');
+  const rects = bars.map(([c, v], i) => {
+    const x = +(pl + i * (bw + gap)).toFixed(1);
+    if (!(v > 0)) return `<rect class="bar stub ${c}" x="${x}" y="${base - 2}" width="${bw}" height="2" rx="1"/>`;
+    const h = Math.max(5, (v / max) * (base - pt)); const r = Math.min(bw * 0.46, h); const y = +(base - h).toFixed(1);
+    return `<path class="bar ${c}" style="--d:${i * 0.16}s" d="M${x} ${base}V${+(y + r).toFixed(1)}A${r} ${r} 0 0 1 ${+(x + r).toFixed(1)} ${y}H${+(x + bw - r).toFixed(1)}A${r} ${r} 0 0 1 ${+(x + bw).toFixed(1)} ${+(y + r).toFixed(1)}V${base}Z"/>`;
+  }).join('');
+  const hasAny = t.income > 0 || t.spent > 0;
+  const bud = budgetFor(period); const bpct = bud ? Math.min(100, Math.round((t.spent / bud) * 100)) : 0;
+  const live = isCurrentPeriod(period, key) && period !== 'lifetime';
+  const val = (id, v, cls, label, neg) => `<div><b class="${cls}">${neg ? '−' : ''}<span data-count="${Math.abs(v)}" data-ck="flow-${id}${tag}">${inr(v)}</span></b><small>${label}</small></div>`;
+  return `<section class="card flow ${FLOW_ANIM ? 'draw' : ''}">
+    <div class="fhead"><span class="live ${live ? 'on' : ''}"><i></i>${live ? 'Live' : period === 'lifetime' ? 'All time' : 'Summary'}</span><small>${periodLabel(period, key)}</small></div>
+    <svg class="fsvg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Income, expenses and money left">
+      ${grid}${rects}
+    </svg>
+    <div class="fvals">${val('i', t.income, '', 'Income')}${val('s', t.spent, '', 'Expenses')}${val('l', left, left < 0 ? 'r' : '', 'Left', left < 0)}</div>
+    ${hasAny ? '' : '<div class="fempty">Tap + and add an income or expense. The bars will rise live.</div>'}
+    ${bud ? `<div class="bud"><div class="budh"><span>Budget ${inr(bud)}</span><b class="${t.spent > bud ? 'r' : ''}">${t.spent > bud ? 'Over by ' + inr(t.spent - bud) : inr(bud - t.spent) + ' left'}</b></div><div class="ubar ${bpct >= 90 ? 'hot' : ''}"><i style="width:${bpct}%"></i></div></div>` : ''}
+  </section>`;
+}
+function moreView() {
+  const period = CFG.period || 'monthly'; const key = periodKey(period); const cur = isCurrentPeriod(period, key); const bud = budgetFor(period);
+  const nav = period === 'lifetime' ? '' : `<button class="ibtn" data-a="pn" data-v="-1" aria-label="Previous">${ic('back')}</button><b>${periodLabel(period, key)}</b><button class="ibtn" data-a="pn" data-v="1" aria-label="Next" ${cur ? 'disabled' : ''}>${ic('next')}</button>`;
+  return `<div class="top"><div class="brand"><div class="om">ॐ</div><div><h1>Income &amp; expenses</h1><small>Your own money</small></div></div></div>
+  ${seg('period', [['monthly', 'Monthly'], ['yearly', 'Yearly'], ['lifetime', 'Lifetime']], period, true)}
+  <div class="mnav">${nav || '<b>All your entries</b>'}</div>
+  ${flowCard(period, key, 'm')}
+  <button class="btn ghost bset" data-a="budget">${bud ? 'Change ' + period + ' budget · ' + inr(bud) : 'Set a ' + period + ' budget'}</button>
+  <div style="margin-top:20px">${seg('ck', [['in', 'Income'], ['out', 'Expense']], UI.ck || 'out', true)}</div>
+  <div id="cashlist">${cashList(period, key)}</div>`;
+}
+function cashRow(c) {
+  const d = parseAt(c.at); const g = c.kind === 'in';
+  return `<button class="row" data-a="cash" data-id="${c.id}"><span class="ic ${g ? 'g' : 'r'}">${ic(g ? 'inc' : 'exp')}</span><span class="pm"><b>${fDate(d)}</b><small>${fTime(d)}${c.note ? ' · ' + esc(c.note) : ''}</small></span><span class="amt ${g ? 'g' : 'r'}">${g ? '+' : '−'}${inr(c.amount)}</span></button>`;
+}
+function cashList(period, key) {
+  const kind = UI.ck || 'out'; const isIn = kind === 'in';
+  const rows = S.data.cash.filter((c) => c.kind === kind && inPeriod(c.at, period, key)).sort((a, b) => b.at.localeCompare(a.at));
+  const total = r2(rows.reduce((a, c) => a + c.amount, 0));
+  const by = new Map(); for (const c of rows) { if (!by.has(c.category)) by.set(c.category, []); by.get(c.category).push(c); }
+  const mine = S.data.cats.filter((c) => c.kind === kind).map((c) => c.name);
+  for (const n of mine) if (!by.has(n)) by.set(n, []);
+  const sum = (a) => a.reduce((x, c) => x + c.amount, 0);
+  const secs = [...by.entries()].sort((a, b) => sum(b[1]) - sum(a[1]) || a[0].localeCompare(b[0]));
+  const sec = ([name, list], i) => {
+    const v = r2(sum(list)); const pct = total ? Math.round((v / total) * 100) : 0; const own = mine.includes(name) && !DEF[kind].includes(name);
+    return `<section class="card csec" style="--k:${Math.min(i, 9)}"><div class="csh"><div><b>${esc(name)}${own ? ' <i class="own">Yours</i>' : ''}</b><small>${list.length} ${list.length === 1 ? 'entry' : 'entries'}${total && v ? ' · ' + pct + '%' : ''}</small></div><b class="amt ${isIn ? 'g' : 'r'}">${inr(v)}</b></div>
+      <div class="cbar ${isIn ? 'g' : 'r'}"><i style="width:${v ? Math.max(3, pct) : 0}%"></i></div>
+      ${list.length ? `<div class="clist">${list.map(cashRow).join('')}</div>` : '<div class="cnone">Nothing here yet</div>'}</section>`;
+  };
+  return `<section class="card big-total ${isIn ? 'g' : 'r'}" style="margin-top:16px"><small>${isIn ? 'Total income' : 'Total spent'} · ${periodLabel(period, key)}</small><b data-count="${total}" data-ck="flow-t">${inr(total)}</b></section>
+  <h2 class="sec">${isIn ? 'Income by source' : 'Expenses by category'}</h2>
+  ${secs.some(([, l]) => l.length) || mine.length ? `<div class="csecs">${secs.map(sec).join('')}</div>` : `<div class="empty"><div class="om">ॐ</div>${isIn ? 'No income recorded yet.' : 'No expenses recorded yet.'}<br>Tap the + button to add one.</div>`}`;
+}
+
+// plus-button menu: opens like a page unfolding out of the button
+function menuHTML() {
+  const T = (k, ico, cls, t, sub, i) => `<button class="mt" style="--k:${i}" data-a="pick-kind" data-v="${k}"><span class="mi ${cls}">${ic(ico)}</span><b>${t}</b><small>${sub}</small></button>`;
+  return `<div class="mscrim" data-a="menu-close"></div><div class="mcard">
+    <div class="mcap">Between people</div>
+    <div class="mrow">${T('gave', 'recv', 'g', 'You Gave', 'Money you will receive', 0)}${T('took', 'pay', 'r', 'You Took', 'Money you will pay', 1)}</div>
+    <div class="mcap">Your own money</div>
+    <div class="mrow">${T('in', 'inc', 'g', 'Income', 'Salary, business, gifts', 2)}${T('out', 'exp', 'r', 'Expense', 'Food, travel, bills', 3)}</div>
+  </div>`;
+}
+function showMenu() {
+  if (UI.menu || UI.sheet) return;
+  UI.menu = true; history.pushState({ k: 'menu' }, '');
+  const m = $('#menu'); m.className = 'on'; m.innerHTML = menuHTML();
+  const f = $('#fab'); if (f) f.classList.add('open'); hap([6, 30, 10]);
+}
+function hideMenu() {
+  UI.menu = false;
+  const m = $('#menu'); const f = $('#fab'); if (f) f.classList.remove('open');
+  if (!m || !m.classList.contains('on')) return;
+  m.classList.add('out'); setTimeout(() => { if (!UI.menu) { m.className = ''; m.innerHTML = ''; } }, 300);
+}
+function newCash(kind) {
+  const n = nowParts(); const last = (CFG.lastCat || {})[kind];
+  return { step: 'cash', f: { id: null, kind, amount: '', cat: last || DEF[kind][0], date: n.date, time: n.time, note: '' } };
+}
+function catChips(f) {
+  const customs = S.data.cats.filter((c) => c.kind === f.kind && !DEF[f.kind].some((d) => d.toLowerCase() === c.name.toLowerCase()));
+  const chip = (n, id) => `<button type="button" class="chip ${n === f.cat ? 'on' : ''}" data-a="cat" data-v="${esc(n)}">${esc(n)}${id ? `<span class="cx" data-a="cat-del" data-id="${id}" aria-label="Remove category">×</span>` : ''}</button>`;
+  const known = DEF[f.kind].concat(customs.map((c) => c.name));
+  const extra = f.cat && !known.some((n) => n === f.cat) ? chip(f.cat) : '';
+  return DEF[f.kind].map((n) => chip(n)).join('') + customs.map((c) => chip(c.name, c.id)).join('') + extra + `<button type="button" class="chip add" data-a="cat-new">+ New</button>`;
+}
+function cashHTML(s) {
+  const f = s.f; const isIn = f.kind === 'in';
+  return `<div class="sh-head"><h3><span id="ch-title">${f.id ? 'Edit ' : ''}${isIn ? 'Income' : 'Expense'}</span><small id="ch-sub">${isIn ? 'Money that came to you' : 'Money you spent'}</small></h3><button class="ibtn" data-a="close" aria-label="Close">${ic('x')}</button></div>
+  ${seg('ckind', [['in', 'Income'], ['out', 'Expense']], f.kind)}
+  <label class="f">Amount (₹)</label><input class="inp" name="amount" inputmode="decimal" placeholder="0" autocomplete="off" value="${esc(f.amount)}">
+  <label class="f" id="cat-label">${isIn ? 'Where did it come from?' : 'What was it for?'}</label>
+  <div class="chips" id="catbox">${catChips(f)}</div>
+  <div class="newcat" id="newcat" style="display:none"><input class="inp" id="f-newcat" maxlength="30" placeholder="Name your own category" autocomplete="off"><button class="btn primary" data-a="cat-add">Add</button></div>
+  <div class="two"><div><label class="f">Date</label><input class="inp" type="date" name="date" value="${f.date}"></div><div><label class="f">Time</label><input class="inp" type="time" name="time" value="${f.time}"></div></div>
+  <div class="acts"><button class="btn ghost" data-a="cash-save">Save</button><button class="btn primary" data-a="cash-next">Next</button></div>`;
+}
+function cashNoteHTML(s) {
+  const f = s.f; const isIn = f.kind === 'in';
+  return `<div class="sh-head"><h3>Description<small>${isIn ? 'Income' : 'Expense'} · ${esc(f.cat)} · ${inr(parseFloat(String(f.amount).replace(/,/g, '')) || 0)}</small></h3><button class="ibtn" data-a="close" aria-label="Close">${ic('x')}</button></div>
+  <label class="f" style="margin-top:0">${isIn ? 'Add a note about this income' : 'What was this expense for?'}</label>
+  <textarea class="inp" name="note" id="f-cnote" placeholder="Optional. You can leave it empty." style="min-height:130px">${esc(f.note)}</textarea>
+  <div class="acts"><button class="btn ghost" data-a="cash-back">Back</button><button class="btn primary" data-a="cash-save">Save</button></div>`;
+}
+function cashDetailHTML(s) {
+  const c = S.data.cash.find((x) => x.id === s.id); if (!c) return '<div class="empty">Entry not found</div>';
+  const d = parseAt(c.at); const g = c.kind === 'in';
+  return `<div class="sh-head"><h3>${g ? 'Income' : 'Expense'} details</h3><button class="ibtn" data-a="close" aria-label="Close">${ic('x')}</button></div>
+  <div class="big-amt"><span class="tag ${g ? 'g' : 'r'}">${g ? 'Income' : 'Expense'}</span><b class="${g ? 'g' : 'r'}">${g ? '+' : '−'}${inr(c.amount)}</b></div>
+  <div class="kv"><span>${g ? 'Source' : 'Category'}</span><span>${esc(c.category)}</span></div>
+  <div class="kv"><span>Date</span><span>${fDate(d)}</span></div>
+  <div class="kv"><span>Time</span><span>${fTime(d)}</span></div>
+  <div class="kv"><span>Description</span><span>${c.note ? esc(c.note) : '—'}</span></div>
+  <div class="acts"><button class="btn ghost danger" data-a="cash-delete" data-id="${c.id}">Delete</button><button class="btn primary" data-a="cash-edit" data-id="${c.id}">Edit</button></div>`;
+}
+function budgetHTML(s) {
+  const f = s.f; const nm = { monthly: 'monthly', yearly: 'yearly', lifetime: 'lifetime' }[f.period];
+  return `<div class="sh-head"><h3>Set ${nm} budget<small>The most you plan to spend. Leave empty to remove it.</small></h3><button class="ibtn" data-a="close" aria-label="Close">${ic('x')}</button></div>
+  <label class="f" style="margin-top:0">Budget amount (₹)</label><input class="inp" name="amount" inputmode="decimal" placeholder="e.g. 20000" autocomplete="off" value="${esc(f.amount)}">
+  <div class="acts"><button class="btn ghost" data-a="close">Cancel</button><button class="btn primary" data-a="budget-save">Save</button></div>`;
+}
+function cashValid(f) {
+  const amount = parseFloat(String(f.amount).replace(/,/g, ''));
+  if (!(amount > 0)) { toast('Enter a valid amount'); return null; }
+  if (!f.cat) { toast('Pick a category'); return null; }
+  if (!f.date || !f.time) { toast('Pick date and time'); return null; }
+  return r2(amount);
+}
+function cashSave() {
+  const f = UI.sheet.f; const amount = cashValid(f); if (amount == null) return;
+  op({ t: 'cash', id: f.id || uid(), kind: f.kind, amount, category: f.cat, at: `${f.date}T${f.time}`, note: (f.note || '').trim() });
+  CFG.lastCat = { ...(CFG.lastCat || {}), [f.kind]: f.cat }; saveCfg();
+  burst(); closeSheet(); toast(f.id ? 'Updated' : f.kind === 'in' ? 'Income saved' : 'Expense saved');
+}
+
 // ---------- sheets ----------
 function renderSheet() {
   const el = $('#sheet'); if (!el) return;
@@ -484,7 +695,7 @@ function renderSheet() {
     if (p) { p.classList.add('out'); const sc = $('#sheet .scrim'); if (sc) sc.classList.add('out'); setTimeout(() => { if (!UI.sheet) el.innerHTML = ''; }, 270); } else el.innerHTML = '';
     return;
   }
-  const body = s.step === 'slip' ? slipHTML(s) : s.step === 'msg' ? msgHTML(s) : s.step === 'sched' ? schedHTML(s) : s.step === 'pin' ? pinHTML(s) : detailHTML(s);
+  const body = s.step === 'slip' ? slipHTML(s) : s.step === 'msg' ? msgHTML(s) : s.step === 'sched' ? schedHTML(s) : s.step === 'pin' ? pinHTML(s) : s.step === 'cash' ? cashHTML(s) : s.step === 'cashnote' ? cashNoteHTML(s) : s.step === 'cashdetail' ? cashDetailHTML(s) : s.step === 'budget' ? budgetHTML(s) : detailHTML(s);
   const panel = $('#sheet .panel');
   if (panel && !panel.classList.contains('out')) {
     panel.innerHTML = `<div class="grab"></div><div class="swap">${body}</div>`; panel.scrollTop = 0;
@@ -495,7 +706,7 @@ function renderSheet() {
   const step = s.step;
   setTimeout(() => {
     if (!UI.sheet || UI.sheet.step !== step) return;
-    const t = step === 'slip' ? (s.f.name ? $('[name=amount]') : $('#f-name')) : step === 'msg' ? $('#f-msg') : step === 'pin' ? $('[name=cur]') : null;
+    const t = step === 'slip' ? (s.f.name ? $('[name=amount]') : $('#f-name')) : step === 'msg' ? $('#f-msg') : step === 'pin' ? $('[name=cur]') : step === 'cash' ? (s.f.id ? null : $('[name=amount]')) : step === 'cashnote' ? $('#f-cnote') : step === 'budget' ? $('[name=amount]') : null;
     if (t) t.focus({ preventScroll: true });
   }, 430);
 }
@@ -621,13 +832,44 @@ document.addEventListener('click', async (e) => {
   const a = el.dataset.a; const id = el.dataset.id; const s = UI.sheet;
   switch (a) {
     case 'unlock': doUnlock(); break;
+    case 'bio-unlock': bioTry(); break;
+    case 'bio-toggle': {
+      if (CFG.bio) { bioClear(); toast('Quick unlock is off'); renderView(false); break; }
+      if (!(await bioAvailable())) { toast('No fingerprint, face or screen lock is available on this phone or browser'); break; }
+      try { await bioEnable(PIN); toast('Quick unlock is on'); burst(); } catch { bioClear(); toast('Could not turn it on'); }
+      renderView(false); break;
+    }
     case 'eye': { const i = el.parentElement.querySelector('input'); i.type = i.type === 'password' ? 'text' : 'password'; el.classList.toggle('on', i.type === 'text'); break; }
     case 'relogin': forceAuth(''); break;
     case 'tab': if (UI.tab !== el.dataset.v) { UI.tab = el.dataset.v; if (UI.tab !== 'me') { CFG.tab = UI.tab; saveCfg(); } renderView(true); renderNav(); window.scrollTo(0, 0); if (UI.tab === 'me') loadMe(); } break;
     case 'party': openLayer({ id }); break;
     case 'back': closeLayer(); break;
     case 'close': closeSheet(); break;
-    case 'add': openSheet(newSlip(el.dataset.kind || null, el.dataset.party || null)); break;
+    case 'add': if (el.dataset.kind || el.dataset.party) openSheet(newSlip(el.dataset.kind || null, el.dataset.party || null)); else if (UI.menu) history.back(); else showMenu(); break;
+    case 'menu-close': history.back(); break;
+    case 'pick-kind': {
+      const k = el.dataset.v; try { history.replaceState({ k: 'sheet' }, ''); } catch {}
+      hideMenu(); UI.sheet = k === 'in' || k === 'out' ? newCash(k) : newSlip(k, null); renderSheet(); break;
+    }
+    case 'pn': { const per = CFG.period || 'monthly'; const n = parseInt(el.dataset.v, 10); if (per === 'yearly') { const ny = String(parseInt(UI.cy || yearNow(), 10) + n); if (ny > yearNow()) break; UI.cy = ny; } else { const nk = shiftMonth(UI.cm || monthNow(), n); if (nk > monthNow()) break; UI.cm = nk; } renderView(true); break; }
+    case 'budget': { const per = CFG.period || 'monthly'; openSheet({ step: 'budget', f: { period: per, amount: budgetFor(per) ? String(budgetFor(per)) : '' } }); break; }
+    case 'budget-save': { const f = s.f; const v = parseFloat(String(f.amount).replace(/,/g, '')); if (f.amount && !(v > 0)) return toast('Enter a valid amount'); op({ t: 'budget', id: 'budget-' + f.period, period: f.period, amount: v > 0 ? r2(v) : 0 }); closeSheet(); toast(v > 0 ? 'Budget saved' : 'Budget removed'); break; }
+    case 'cash': openSheet({ step: 'cashdetail', id }); break;
+    case 'cash-edit': { const c = S.data.cash.find((x) => x.id === id); const d = parseAt(c.at); UI.sheet = { step: 'cash', f: { id: c.id, kind: c.kind, amount: String(c.amount), cat: c.category, date: ymd(d), time: hm(d), note: c.note || '' } }; renderSheet(); break; }
+    case 'cash-delete': if (await ask('Delete this entry?', 'It will be removed permanently.')) { closeSheet(); op({ t: 'cash_del', id }); toast('Deleted'); } break;
+    case 'cash-next': { if (cashValid(s.f) == null) break; s.step = 'cashnote'; renderSheet(); break; }
+    case 'cash-back': s.step = 'cash'; renderSheet(); break;
+    case 'cash-save': cashSave(); break;
+    case 'cat': { s.f.cat = el.dataset.v; $('#catbox').innerHTML = catChips(s.f); break; }
+    case 'cat-new': { const nc = $('#newcat'); nc.style.display = 'flex'; const i = $('#f-newcat'); i.value = ''; i.focus(); break; }
+    case 'cat-add': {
+      const i = $('#f-newcat'); const name = (i.value || '').trim().replace(/\s+/g, ' ').slice(0, 30);
+      if (!name) return toast('Type a category name');
+      const hit = DEF[s.f.kind].concat(S.data.cats.filter((c) => c.kind === s.f.kind).map((c) => c.name)).find((n) => n.toLowerCase() === name.toLowerCase());
+      if (!hit) op({ t: 'cat', id: uid(), kind: s.f.kind, name });
+      s.f.cat = hit || name; $('#newcat').style.display = 'none'; $('#catbox').innerHTML = catChips(s.f); break;
+    }
+    case 'cat-del': { const c = S.data.cats.find((x) => x.id === id); if (!c) break; op({ t: 'cat_del', id }); if (s.f.cat === c.name) s.f.cat = DEF[s.f.kind][0]; $('#catbox').innerHTML = catChips(s.f); toast('Category removed'); break; }
     case 'txn': openSheet({ step: 'detail', id }); break;
     case 'txn-edit': { const t = S.data.txns.find((x) => x.id === id); const p = partyById(t.party_id); const d = parseAt(t.txn_at); UI.sheet = { step: 'slip', f: { id: t.id, kind: t.kind, name: p.name, phone: p.phone || '', amount: String(t.amount), date: ymd(d), time: hm(d), note: t.note || '', partyId: p.id } }; renderSheet(); break; }
     case 'txn-delete': if (await ask('Delete transaction?', 'This will remove it and its reminders permanently.')) { closeSheet(); op({ t: 'txn_del', id }); toast('Deleted'); } break;
@@ -641,6 +883,13 @@ document.addEventListener('click', async (e) => {
       const btns = [...inner.querySelectorAll('.seg-b')]; inner.style.setProperty('--i', btns.indexOf(el)); box.dataset.tone = v;
       btns.forEach((b) => b.classList.toggle('on', b === el));
       if (name === 'kind' && s) s.f.kind = v;
+      if (name === 'ckind' && s) {
+        s.f.kind = v; s.f.cat = (CFG.lastCat || {})[v] || DEF[v][0]; const isIn = v === 'in';
+        $('#catbox').innerHTML = catChips(s.f); $('#ch-title').textContent = (s.f.id ? 'Edit ' : '') + (isIn ? 'Income' : 'Expense');
+        $('#ch-sub').textContent = isIn ? 'Money that came to you' : 'Money you spent'; $('#cat-label').textContent = isIn ? 'Where did it come from?' : 'What was it for?'; $('#newcat').style.display = 'none';
+      }
+      if (name === 'period') { CFG.period = v; saveCfg(); renderView(true); }
+      if (name === 'ck') { UI.ck = v; const cl = $('#cashlist'); if (cl) { cl.innerHTML = cashList(CFG.period || 'monthly', periodKey(CFG.period || 'monthly')); cl.querySelectorAll('.list').forEach((l) => [...l.children].forEach((c, i) => c.style.setProperty('--k', Math.min(i, 9)))); delete UI.counts['flow-t']; animateCounts(cl); } }
       if (name === 'target' && s) {
         s.f.target = v; const self = v === 'self'; const p = partyById(s.f.partyId);
         $('#msg-label').textContent = self ? 'What should the notification say?' : 'Type the message to send';
@@ -698,6 +947,7 @@ document.addEventListener('click', async (e) => {
       try {
         await api('/api/change-password', { pin: f.cur, newPin: f.nw });
         CFG.salt = b64e(crypto.getRandomValues(new Uint8Array(16))); saveCfg(); K = await deriveKey(f.nw, CFG.salt); PIN = f.nw; await sealCache();
+        if (CFG.bio) { try { CFG.bio.blob = await bioStore(f.nw); saveCfg(); } catch { bioClear(); } }
         closeSheet(); toast('Password changed'); burst();
       } catch (err) { er.textContent = err.message; }
       break;
@@ -727,6 +977,7 @@ document.addEventListener('input', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.closest('#authForm')) authGo();
   if (e.key === 'Enter' && e.target.id === 'l-pw') doUnlock();
+  if (e.key === 'Enter' && e.target.id === 'f-newcat') { e.preventDefault(); const b = $('[data-a=cat-add]'); if (b) b.click(); }
 });
 
 let hiddenAt = 0;
@@ -744,6 +995,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 (function boot() {
   applyTheme();
   const q = new URLSearchParams(location.search).get('tab'); if (TABS.includes(q)) UI.startTab = q;
+  const qa = new URLSearchParams(location.search).get('add'); if (['gave', 'took', 'in', 'out'].includes(qa)) UI.startAdd = qa;
   if (CFG.salt && CFG.phone && localStorage.getItem(CK)) { renderLock(); return; }
   renderAuth(); loadStatus();
 })();

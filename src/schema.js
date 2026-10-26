@@ -12,5 +12,9 @@ export const SCHEMA = [
   "CREATE INDEX IF NOT EXISTS idx_txn_user ON txns(user_id)",
   "CREATE INDEX IF NOT EXISTS idx_party_user ON parties(user_id)",
   "CREATE INDEX IF NOT EXISTS idx_notif_user ON notifs(user_id, shown)",
-  "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)"
+  "CREATE TABLE IF NOT EXISTS meta ( k TEXT PRIMARY KEY, v TEXT NOT NULL )",
+  "CREATE TABLE IF NOT EXISTS cash ( id TEXT PRIMARY KEY, user_id TEXT NOT NULL, d TEXT NOT NULL, created_at INTEGER )",
+  "CREATE TABLE IF NOT EXISTS cats ( id TEXT PRIMARY KEY, user_id TEXT NOT NULL, d TEXT NOT NULL, created_at INTEGER )",
+  "CREATE INDEX IF NOT EXISTS idx_cash_user ON cash(user_id)",
+  "CREATE INDEX IF NOT EXISTS idx_cats_user ON cats(user_id)"
 ];
